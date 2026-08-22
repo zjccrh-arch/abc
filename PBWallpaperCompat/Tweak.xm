@@ -94,8 +94,9 @@ static void PBWInstallNativeRenderer(void) {
     UIView *host = PBWLegacyWallpaperHost();
     NSString *wallpaperPath = PBWActiveWallpaperPath();
     Class rendererClass = NSClassFromString(@"hpebutktbedt");
-    SEL setup = NSSelectorFromString(@"PBWMethod015:");
+    SEL setup = NSSelectorFromString(@"PBWMethod015:animated:");
     SEL setActive = NSSelectorFromString(@"PBWBgSetActive:");
+    SEL setRendererEnabled = NSSelectorFromString(@"PBWMethod011:");
     if (host == nil || wallpaperPath == nil || rendererClass == Nil) {
         if (retryCount++ < 20) {
             dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(500 * NSEC_PER_MSEC)), dispatch_get_main_queue(), ^{
@@ -119,10 +120,16 @@ static void PBWInstallNativeRenderer(void) {
     renderer.userInteractionEnabled = NO;
     renderer.clipsToBounds = YES;
     [host addSubview:renderer];
-    ((void (*)(id, SEL, NSString *))objc_msgSend)(renderer, setup, wallpaperPath);
+    // The one-argument entry point only updates pending state. The renderer
+    // constructs its CA/video hierarchy through the animated load entry.
+    ((void (*)(id, SEL, NSString *, BOOL))objc_msgSend)(renderer, setup, wallpaperPath, NO);
     if ([renderer respondsToSelector:setActive]) {
         ((void (*)(id, SEL, BOOL))objc_msgSend)(renderer, setActive, YES);
     }
+    if ([renderer respondsToSelector:setRendererEnabled]) {
+        ((void (*)(id, SEL, BOOL))objc_msgSend)(renderer, setRendererEnabled, YES);
+    }
+    renderer.hidden = NO;
 }
 
 %hook CSCoverSheetViewController
