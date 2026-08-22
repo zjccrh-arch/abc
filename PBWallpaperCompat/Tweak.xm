@@ -1,11 +1,13 @@
 #import <Foundation/Foundation.h>
 #import <UIKit/UIKit.h>
 #import <objc/message.h>
+#import <objc/runtime.h>
 
 static NSString *const kPreferencesDomain = @"com.charlieleung.pbwallpaperprefs";
 static CFStringRef const kPreferencesChanged = CFSTR("com.charlieleung.pbwallpaperprefs-updated");
 static NSInteger const kContainerTag = 0x50425716;
 static NSUInteger retryCount;
+static char kStateMappingAssociationKey;
 
 static UIView *PBWWallpaperHost(void) {
     for (UIWindow *window in [UIApplication sharedApplication].windows) {
@@ -31,12 +33,22 @@ static BOOL PBWIsUILocked(void) {
     return ((BOOL (*)(id, SEL))objc_msgSend)(manager, isUILocked);
 }
 
+static NSDictionary<NSString *, NSString *> *PBWStateMappingForPackage(NSString *packagePath) {
+    NSString *documentPath = [packagePath stringByAppendingPathComponent:@"main.caml"];
+    NSString *document = [NSString stringWithContentsOfFile:documentPath encoding:NSUTF8StringEncoding error:nil];
+    if ([document containsString:@"<LKState name=\"Locked\""] && [document containsString:@"<LKState name=\"Unlock\""]) {
+        return @{ @"locked": @"Locked", @"home": @"Unlock" };
+    }
+    return @{ @"locked": @"Lock PortraitUp", @"home": @"Home PortraitUp" };
+}
+
 static void PBWApplyState(BOOL locked, BOOL animated) {
     UIView *container = [PBWWallpaperHost() viewWithTag:kContainerTag];
     SEL setState = NSSelectorFromString(@"setState:animated:");
-    NSString *state = locked ? @"Lock PortraitUp" : @"Home PortraitUp";
     for (UIView *packageView in container.subviews) {
         if ([packageView respondsToSelector:setState]) {
+            NSDictionary<NSString *, NSString *> *mapping = objc_getAssociatedObject(packageView, &kStateMappingAssociationKey);
+            NSString *state = mapping[locked ? @"locked" : @"home"];
             ((void (*)(id, SEL, NSString *, BOOL))objc_msgSend)(packageView, setState, state, animated);
         }
     }
@@ -143,6 +155,7 @@ static void PBWInstallPackages(void) {
         packageView.frame = container.bounds;
         packageView.autoresizingMask = UIViewAutoresizingFlexibleWidth | UIViewAutoresizingFlexibleHeight;
         packageView.userInteractionEnabled = NO;
+        objc_setAssociatedObject(packageView, &kStateMappingAssociationKey, PBWStateMappingForPackage(packagePath), OBJC_ASSOCIATION_RETAIN_NONATOMIC);
         [container addSubview:packageView];
     }
 
