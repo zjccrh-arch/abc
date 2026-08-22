@@ -7,7 +7,7 @@ include $(THEOS)/makefiles/common.mk
 
 TWEAK_NAME = PBWallpaperCompat
 PBWallpaperCompat_FILES = Tweak.xm
-PBWallpaperCompat_CFLAGS = -fobjc-arc
+PBWallpaperCompat_CFLAGS = -fobjc-arc -Wno-deprecated-declarations
 PBWallpaperCompat_FRAMEWORKS = UIKit Foundation
 PBWallpaperCompat_PRIVATE_FRAMEWORKS = BaseBoardUI
 
