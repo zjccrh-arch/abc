@@ -12,6 +12,10 @@ static BOOL rendererLocked;
 
 static void PBWInstallRenderer(void);
 
+static BOOL PBWIsMainThread(void) {
+    return NSThread.isMainThread;
+}
+
 static UIView *PBWWallpaperHost(void) {
     for (UIWindow *window in [UIApplication sharedApplication].windows) {
         if ([NSStringFromClass(window.class) isEqualToString:@"_SBWallpaperSecureWindow"] && window.subviews.count) {
@@ -45,6 +49,13 @@ static id PBWRenderer(void) {
 }
 
 static void PBWApplyLockState(BOOL locked, BOOL force) {
+    if (!PBWIsMainThread()) {
+        dispatch_async(dispatch_get_main_queue(), ^{
+            PBWApplyLockState(locked, force);
+        });
+        return;
+    }
+
     id renderer = PBWRenderer();
     if (renderer == nil) {
         PBWInstallRenderer();
@@ -64,6 +75,15 @@ static void PBWApplyLockState(BOOL locked, BOOL force) {
 }
 
 static void PBWApplyCoverSheetProgress(double progress) {
+    // UIKit invokes this selector from its animation-manager thread on iOS 16.
+    // The native renderer mutates views/layers, so it must only run on main.
+    if (!PBWIsMainThread()) {
+        dispatch_async(dispatch_get_main_queue(), ^{
+            PBWApplyCoverSheetProgress(progress);
+        });
+        return;
+    }
+
     id renderer = PBWRenderer();
     if (renderer == nil) {
         PBWInstallRenderer();
@@ -81,6 +101,13 @@ static void PBWRemoveRenderer(void) {
 }
 
 static void PBWInstallRenderer(void) {
+    if (!PBWIsMainThread()) {
+        dispatch_async(dispatch_get_main_queue(), ^{
+            PBWInstallRenderer();
+        });
+        return;
+    }
+
     NSUserDefaults *preferences = PBWPreferences();
     if (![preferences boolForKey:@"PBWallpaperEnabled"]) {
         PBWRemoveRenderer();
