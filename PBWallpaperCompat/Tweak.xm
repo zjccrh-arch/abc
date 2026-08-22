@@ -1,0 +1,129 @@
+#import <Foundation/Foundation.h>
+#import <UIKit/UIKit.h>
+
+@interface BSUICAPackageView : UIView
+- (instancetype)initWithURL:(NSURL *)url;
+@end
+
+static NSString *const kPreferencesDomain = @"com.charlieleung.pbwallpaperprefs";
+static CFStringRef const kPreferencesChanged = CFSTR("com.charlieleung.pbwallpaperprefs-updated");
+static NSInteger const kContainerTag = 0x50425716;
+static NSUInteger retryCount;
+
+static UIView *PBWWallpaperHost(void) {
+    for (UIWindow *window in [UIApplication sharedApplication].windows) {
+        if ([NSStringFromClass(window.class) isEqualToString:@"_SBWallpaperSecureWindow"] && window.subviews.count) {
+            return window.subviews.firstObject;
+        }
+    }
+    return nil;
+}
+
+static NSDictionary *PBWDefaultAssets(NSDictionary *wallpaper) {
+    NSDictionary *assets = wallpaper[@"assets"];
+    NSDictionary *lockAndHome = assets[@"lockAndHome"];
+    NSDictionary *defaults = lockAndHome[@"default"];
+    return [defaults isKindOfClass:NSDictionary.class] ? defaults : nil;
+}
+
+static NSUserDefaults *PBWPreferences(void) {
+    return [[NSUserDefaults alloc] initWithSuiteName:kPreferencesDomain];
+}
+
+static NSString *PBWActiveWallpaperPath(NSUserDefaults *preferences) {
+    NSString *dataRoot = [preferences stringForKey:@"PBWDataRootPath"];
+    if ([dataRoot isKindOfClass:NSString.class]) {
+        NSString *markerPath = [dataRoot stringByAppendingPathComponent:@".pbwactive"];
+        NSError *error = nil;
+        NSString *activePath = [NSString stringWithContentsOfFile:markerPath encoding:NSUTF8StringEncoding error:&error];
+        activePath = [activePath stringByTrimmingCharactersInSet:NSCharacterSet.whitespaceAndNewlineCharacterSet];
+        if (activePath.length && [[NSFileManager defaultManager] fileExistsAtPath:activePath]) {
+            return activePath;
+        }
+    }
+
+    NSString *selectedPath = [preferences stringForKey:@"pbWallpaperPath"];
+    return [[NSFileManager defaultManager] fileExistsAtPath:selectedPath] ? selectedPath : nil;
+}
+
+static void PBWRemoveContainer(void) {
+    UIView *host = PBWWallpaperHost();
+    [[host viewWithTag:kContainerTag] removeFromSuperview];
+}
+
+static void PBWInstallPackages(void) {
+    NSUserDefaults *preferences = PBWPreferences();
+    if (![preferences boolForKey:@"PBWallpaperEnabled"]) {
+        PBWRemoveContainer();
+        return;
+    }
+
+    NSString *wallpaperPath = PBWActiveWallpaperPath(preferences);
+    if (wallpaperPath == nil) {
+        PBWRemoveContainer();
+        return;
+    }
+
+    NSDictionary *wallpaper = [NSDictionary dictionaryWithContentsOfFile:[wallpaperPath stringByAppendingPathComponent:@"Wallpaper.plist"]];
+    NSDictionary *assets = PBWDefaultAssets(wallpaper);
+    UIView *host = PBWWallpaperHost();
+    if (assets == nil || host == nil) {
+        if (retryCount++ < 20) {
+            dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(500 * NSEC_PER_MSEC)), dispatch_get_main_queue(), ^{
+                PBWInstallPackages();
+            });
+        }
+        return;
+    }
+
+    retryCount = 0;
+    [[host viewWithTag:kContainerTag] removeFromSuperview];
+
+    UIView *container = [[UIView alloc] initWithFrame:host.bounds];
+    container.tag = kContainerTag;
+    container.autoresizingMask = UIViewAutoresizingFlexibleWidth | UIViewAutoresizingFlexibleHeight;
+    container.userInteractionEnabled = NO;
+    container.clipsToBounds = YES;
+
+    NSArray<NSString *> *keys = @[
+        @"backgroundAnimationFileName",
+        @"foregroundAnimationFileName",
+        @"floatingAnimationFileNameKey"
+    ];
+    for (NSString *key in keys) {
+        NSString *filename = assets[key];
+        if (![filename isKindOfClass:NSString.class]) {
+            continue;
+        }
+        NSString *packagePath = [wallpaperPath stringByAppendingPathComponent:filename];
+        if (![[NSFileManager defaultManager] fileExistsAtPath:packagePath]) {
+            continue;
+        }
+        BSUICAPackageView *packageView = [[BSUICAPackageView alloc] initWithURL:[NSURL fileURLWithPath:packagePath]];
+        if (packageView == nil) {
+            continue;
+        }
+        packageView.frame = container.bounds;
+        packageView.autoresizingMask = UIViewAutoresizingFlexibleWidth | UIViewAutoresizingFlexibleHeight;
+        packageView.userInteractionEnabled = NO;
+        [container addSubview:packageView];
+    }
+
+    if (container.subviews.count) {
+        [host addSubview:container];
+    }
+}
+
+static void PBWPreferencesChanged(CFNotificationCenterRef center, void *observer, CFStringRef name, const void *object, CFDictionaryRef userInfo) {
+    dispatch_async(dispatch_get_main_queue(), ^{
+        retryCount = 0;
+        PBWInstallPackages();
+    });
+}
+
+%ctor {
+    CFNotificationCenterAddObserver(CFNotificationCenterGetDarwinNotifyCenter(), NULL, PBWPreferencesChanged, kPreferencesChanged, NULL, CFNotificationSuspensionBehaviorDeliverImmediately);
+    dispatch_async(dispatch_get_main_queue(), ^{
+        PBWInstallPackages();
+    });
+}

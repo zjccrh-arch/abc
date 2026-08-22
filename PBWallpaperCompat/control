@@ -1,0 +1,9 @@
+Package: com.charlieleung.pbwallpapercompat
+Name: PBWallpaper iOS 16 Compatibility
+Version: 1.0.1
+Architecture: iphoneos-arm
+Description: iOS 16 renderer compatibility layer for PBWallpaper resources
+Maintainer: local
+Author: local
+Section: Tweaks
+Depends: com.charlieleung.pbwallpaper, mobilesubstrate (>= 0.9.5000)
