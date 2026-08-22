@@ -212,27 +212,24 @@ static void PBWApplyHomeFraction(double fraction) {
     }
     [CATransaction commit];
 
-    if (fraction <= 0.0001) {
-        PBWApplyState(YES, NO, YES);
-    } else if (fraction >= 0.9999) {
-        PBWApplyState(NO, NO, YES);
-    } else {
-        lastAppliedStateKnown = NO;
-    }
+    // The package view's private state machine must not be re-entered from
+    // SpringBoard's animation tick. Lifecycle hooks perform final settling.
+    lastAppliedStateKnown = NO;
 }
 
 static void PBWApplyCoverSheetProgress(double progress, BOOL gestureActive) {
-    if (gestureActive && !interactiveOriginKnown) {
+    if (!gestureActive) {
+        interactiveOriginKnown = NO;
+        return;
+    }
+
+    if (!interactiveOriginKnown) {
         interactiveOriginLocked = PBWIsUILocked();
         interactiveOriginKnown = YES;
     }
 
     BOOL startedLocked = interactiveOriginKnown ? interactiveOriginLocked : PBWIsUILocked();
     PBWApplyHomeFraction(startedLocked ? progress : 1.0 - progress);
-
-    if (!gestureActive && (progress <= 0.0001 || progress >= 0.9999)) {
-        interactiveOriginKnown = NO;
-    }
 }
 
 static NSDictionary *PBWDefaultAssets(NSDictionary *wallpaper) {
@@ -344,8 +341,17 @@ static void PBWInstallPackages(void) {
     }
 
     if (container.subviews.count) {
+        BOOL locked = PBWIsUILocked();
+        SEL setState = NSSelectorFromString(@"setState:animated:");
+        for (UIView *packageView in container.subviews) {
+            if ([packageView respondsToSelector:setState]) {
+                NSDictionary<NSString *, NSString *> *mapping = objc_getAssociatedObject(packageView, &kStateMappingAssociationKey);
+                ((void (*)(id, SEL, NSString *, BOOL))objc_msgSend)(packageView, setState, mapping[locked ? @"locked" : @"home"], NO);
+            }
+        }
         [host addSubview:container];
-        PBWApplyState(PBWIsUILocked(), NO, YES);
+        lastAppliedStateKnown = YES;
+        lastAppliedLocked = locked;
     }
 }
 
