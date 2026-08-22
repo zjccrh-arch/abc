@@ -39,8 +39,8 @@ jobs:
       - name: Publish installable package
         uses: softprops/action-gh-release@v2
         with:
-          tag_name: pbwallpapercompat-v2.0.6
-          name: PBWallpaperCompat 2.0.6
+          tag_name: pbwallpapercompat-v2.0.7
+          name: PBWallpaperCompat 2.0.7
           prerelease: true
           generate_release_notes: false
           files: PBWallpaperCompat/packages/*.deb
