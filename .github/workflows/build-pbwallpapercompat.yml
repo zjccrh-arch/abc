@@ -22,9 +22,7 @@ jobs:
           rm -rf "$HOME/theos/sdks"
           git clone https://github.com/theos/sdks.git "$HOME/theos/sdks"
       - name: Build package
-        env:
-          THEOS: ${{ runner.home }}/theos
-        run: gmake package FINALPACKAGE=1
+        run: THEOS="$HOME/theos" gmake package FINALPACKAGE=1
       - name: Verify package
         run: |
           test -n "$(find packages -name '*.deb' -print -quit)"
