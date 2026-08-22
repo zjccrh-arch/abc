@@ -1,6 +1,7 @@
 #import <Foundation/Foundation.h>
 #import <UIKit/UIKit.h>
 #import <objc/message.h>
+#include <stdint.h>
 
 static NSString *const kPreferencesDomain = @"com.charlieleung.pbwallpaperprefs";
 static CFStringRef const kPreferencesChanged = CFSTR("com.charlieleung.pbwallpaperprefs-updated");
@@ -35,14 +36,6 @@ static NSString *PBWActiveWallpaperPath(NSUserDefaults *preferences) {
 
     NSString *path = [preferences stringForKey:@"pbWallpaperPath"];
     return [[NSFileManager defaultManager] fileExistsAtPath:path] ? path : nil;
-}
-
-static NSDictionary *PBWRendererConfiguration(NSString *wallpaperPath) {
-    NSDictionary *manifest = [NSDictionary dictionaryWithContentsOfFile:[wallpaperPath stringByAppendingPathComponent:@"Wallpaper.plist"]];
-    NSDictionary *assets = manifest[@"assets"];
-    NSDictionary *lockAndHome = assets[@"lockAndHome"];
-    NSDictionary *configuration = lockAndHome[@"default"];
-    return [configuration isKindOfClass:NSDictionary.class] ? configuration : nil;
 }
 
 static BOOL PBWIsUILocked(void) {
@@ -99,11 +92,10 @@ static void PBWInstallRenderer(void) {
     }
 
     NSString *wallpaperPath = PBWActiveWallpaperPath(preferences);
-    NSDictionary *configuration = PBWRendererConfiguration(wallpaperPath);
     UIView *host = PBWWallpaperHost();
     Class rendererClass = NSClassFromString(@"hpebutktbedt");
     SEL loader = NSSelectorFromString(@"PBWMethod009:PBWMethod010:");
-    if (wallpaperPath == nil || configuration == nil || host == nil || rendererClass == Nil) {
+    if (wallpaperPath == nil || host == nil || rendererClass == Nil) {
         if (retryCount++ < 20) {
             dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(500 * NSEC_PER_MSEC)), dispatch_get_main_queue(), ^{
                 PBWInstallRenderer();
@@ -126,8 +118,10 @@ static void PBWInstallRenderer(void) {
     renderer.clipsToBounds = YES;
     [host addSubview:renderer];
 
-    // This provisional bridge is removed unless the native loader produces a model.
-    ((void (*)(id, SEL, id, id))objc_msgSend)(renderer, loader, wallpaperPath, configuration);
+    // PBWMethod010 is the native loader's numeric presentation mode. Passing
+    // the manifest dictionary here prevents the original model builder from
+    // running on arm64e. Mode 0 is the importer/original default path.
+    ((void (*)(id, SEL, id, uint64_t))objc_msgSend)(renderer, loader, wallpaperPath, 0);
     PBWApplyLockState(PBWIsUILocked(), YES);
 
     // The internal loader has no public failure result. Do not leave its empty
