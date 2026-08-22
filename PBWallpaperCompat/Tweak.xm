@@ -342,7 +342,9 @@ static void PBWInstallPackages(void) {
         BOOL locked = lastAppliedStateKnown ? lastAppliedLocked : NO;
         [host addSubview:container];
         PBWApplyState(locked, NO, YES);
-        PBWApplyHomeFraction(locked ? 0.0 : 1.0);
+        dispatch_async(dispatch_get_main_queue(), ^{
+            PBWApplyHomeFraction(locked ? 0.0 : 1.0);
+        });
     }
 }
 
@@ -364,19 +366,16 @@ static void PBWPreferencesChanged(CFNotificationCenterRef center, void *observer
 
 - (void)lockScreenViewControllerWillPresent {
     PBWApplyState(YES, YES, NO);
-    PBWApplyHomeFraction(0.0);
     %orig;
 }
 
 - (void)lockScreenViewControllerWillDismiss {
     PBWApplyState(NO, YES, NO);
-    PBWApplyHomeFraction(1.0);
     %orig;
 }
 
 - (void)_reallySetUILocked:(BOOL)locked {
     PBWApplyState(locked, YES, NO);
-    PBWApplyHomeFraction(locked ? 0.0 : 1.0);
     %orig;
 }
 
@@ -385,8 +384,8 @@ static void PBWPreferencesChanged(CFNotificationCenterRef center, void *observer
 %hook SBCoverSheetPresentationManager
 
 - (void)coverSheetSlidingViewController:(id)controller animationTickedWithProgress:(double)progress velocity:(double)velocity coverSheetFrame:(CGRect)frame gestureActive:(BOOL)gestureActive forPresentationValue:(BOOL)presentationValue {
-    PBWApplyCoverSheetProgress(progress, gestureActive);
     %orig;
+    PBWApplyCoverSheetProgress(progress, gestureActive);
 }
 
 %end
