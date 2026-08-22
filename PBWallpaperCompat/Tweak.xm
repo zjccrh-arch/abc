@@ -11,8 +11,6 @@ static BOOL lastAppliedStateKnown;
 static BOOL lastAppliedLocked;
 static BOOL interactiveOriginKnown;
 static BOOL interactiveOriginLocked;
-static NSUInteger interactiveGeneration;
-static NSUInteger pendingSettlementGeneration;
 static char kStateMappingAssociationKey;
 static char kStateModelAssociationKey;
 
@@ -202,19 +200,15 @@ static void PBWApplyHomeFraction(double fraction) {
     lastAppliedStateKnown = NO;
 }
 
-static void PBWScheduleFinalState(BOOL locked, NSUInteger generation) {
-    pendingSettlementGeneration = generation;
-    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(50 * NSEC_PER_MSEC)), dispatch_get_main_queue(), ^{
-        if (pendingSettlementGeneration == generation && !interactiveOriginKnown) {
-            PBWApplyState(locked, NO, YES);
-            PBWApplyHomeFraction(locked ? 0.0 : 1.0);
-        }
-    });
-}
-
 static void PBWApplyCoverSheetProgress(double progress, BOOL gestureActive) {
+    // iOS sends a terminal progress=0 tick after the gesture ends. Applying it
+    // would overwrite the interaction's final CA frame with the home state.
+    if (!gestureActive) {
+        interactiveOriginKnown = NO;
+        return;
+    }
+
     if (gestureActive && !interactiveOriginKnown) {
-        interactiveGeneration++;
         interactiveOriginLocked = lastAppliedLocked;
         interactiveOriginKnown = YES;
     }
@@ -222,11 +216,44 @@ static void PBWApplyCoverSheetProgress(double progress, BOOL gestureActive) {
     BOOL startedLocked = interactiveOriginKnown ? interactiveOriginLocked : lastAppliedLocked;
     double homeFraction = startedLocked ? progress : 1.0 - progress;
     PBWApplyHomeFraction(homeFraction);
+}
 
-    if (!gestureActive && interactiveOriginKnown && (homeFraction <= 0.0001 || homeFraction >= 0.9999)) {
-        NSUInteger generation = interactiveGeneration;
-        interactiveOriginKnown = NO;
-        PBWScheduleFinalState(homeFraction <= 0.0001, generation);
+static void PBWRebindCoverSheetPortalSource(void) {
+    UIView *wallpaperHost = PBWWallpaperHost();
+    if (wallpaperHost == nil) {
+        return;
+    }
+
+    SEL sourceSelector = NSSelectorFromString(@"source");
+    SEL targetViewSelector = NSSelectorFromString(@"targetView");
+    SEL setTargetViewSelector = NSSelectorFromString(@"setTargetView:");
+    SEL updateSelector = NSSelectorFromString(@"setNeedsSourceUpdate");
+
+    for (UIWindow *window in [UIApplication sharedApplication].windows) {
+        if (![NSStringFromClass(window.class) isEqualToString:@"SBCoverSheetWindow"]) {
+            continue;
+        }
+
+        NSMutableArray<UIView *> *pending = [window.subviews mutableCopy];
+        while (pending.count) {
+            UIView *view = pending.lastObject;
+            [pending removeLastObject];
+            if ([NSStringFromClass(view.class) isEqualToString:@"PBUIPortalReplicaEffectView"] && [view respondsToSelector:sourceSelector]) {
+                id source = ((id (*)(id, SEL))objc_msgSend)(view, sourceSelector);
+                if ([source respondsToSelector:setTargetViewSelector]) {
+                    id currentTarget = [source respondsToSelector:targetViewSelector]
+                        ? ((id (*)(id, SEL))objc_msgSend)(source, targetViewSelector)
+                        : nil;
+                    if (currentTarget != wallpaperHost) {
+                        ((void (*)(id, SEL, id))objc_msgSend)(source, setTargetViewSelector, wallpaperHost);
+                        if ([view respondsToSelector:updateSelector]) {
+                            ((void (*)(id, SEL))objc_msgSend)(view, updateSelector);
+                        }
+                    }
+                }
+            }
+            [pending addObjectsFromArray:view.subviews];
+        }
     }
 }
 
@@ -386,6 +413,9 @@ static void PBWPreferencesChanged(CFNotificationCenterRef center, void *observer
 - (void)coverSheetSlidingViewController:(id)controller animationTickedWithProgress:(double)progress velocity:(double)velocity coverSheetFrame:(CGRect)frame gestureActive:(BOOL)gestureActive forPresentationValue:(BOOL)presentationValue {
     %orig;
     PBWApplyCoverSheetProgress(progress, gestureActive);
+    dispatch_async(dispatch_get_main_queue(), ^{
+        PBWRebindCoverSheetPortalSource();
+    });
 }
 
 %end
