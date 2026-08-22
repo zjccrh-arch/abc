@@ -19,11 +19,12 @@ jobs:
         run: |
           brew install ldid make
           git clone --recursive https://github.com/theos/theos.git "$HOME/theos"
+          rm -rf "$HOME/theos/sdks"
           git clone https://github.com/theos/sdks.git "$HOME/theos/sdks"
       - name: Build package
         env:
           THEOS: ${{ runner.home }}/theos
-        run: make package FINALPACKAGE=1
+        run: gmake package FINALPACKAGE=1
       - name: Verify package
         run: |
           test -n "$(find packages -name '*.deb' -print -quit)"
