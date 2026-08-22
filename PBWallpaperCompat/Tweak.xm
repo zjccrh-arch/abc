@@ -40,20 +40,6 @@ static NSString *PBWActiveWallpaperPath(NSUserDefaults *preferences) {
     return [[NSFileManager defaultManager] fileExistsAtPath:path] ? path : nil;
 }
 
-static BOOL PBWIsUILocked(void) {
-    Class managerClass = NSClassFromString(@"SBLockScreenManager");
-    SEL sharedSelector = NSSelectorFromString(@"sharedInstance");
-    SEL lockedSelector = NSSelectorFromString(@"isUILocked");
-    if (managerClass == Nil || ![managerClass respondsToSelector:sharedSelector]) {
-        return NO;
-    }
-
-    id manager = ((id (*)(id, SEL))objc_msgSend)(managerClass, sharedSelector);
-    return manager != nil && [manager respondsToSelector:lockedSelector]
-        ? ((BOOL (*)(id, SEL))objc_msgSend)(manager, lockedSelector)
-        : NO;
-}
-
 static id PBWRenderer(void) {
     return [PBWWallpaperHost() viewWithTag:kRendererTag];
 }
@@ -132,7 +118,7 @@ static void PBWInstallRenderer(void) {
     // the manifest dictionary here prevents the original model builder from
     // running on arm64e. Mode 0 is the importer/original default path.
     ((void (*)(id, SEL, id, uint64_t))objc_msgSend)(renderer, loader, wallpaperPath, 0);
-    PBWApplyLockState(PBWIsUILocked(), YES);
+    PBWApplyLockState(rendererStateKnown ? rendererLocked : NO, YES);
 
     // The internal loader has no public failure result. Do not leave its empty
     // video fallback over SpringBoard when the native model was not created.
