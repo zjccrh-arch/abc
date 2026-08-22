@@ -1,181 +1,50 @@
 #import <Foundation/Foundation.h>
-#import <UIKit/UIKit.h>
 #import <objc/message.h>
-#include <stdint.h>
 
-static NSString *const kPreferencesDomain = @"com.charlieleung.pbwallpaperprefs";
-static CFStringRef const kPreferencesChanged = CFSTR("com.charlieleung.pbwallpaperprefs-updated");
-static NSInteger const kRendererTag = 0x50425716;
-static NSUInteger retryCount;
-static BOOL rendererStateKnown;
-static BOOL rendererLocked;
-
-static void PBWInstallRenderer(void);
-
-static BOOL PBWIsMainThread(void) {
-    return NSThread.isMainThread;
+static BOOL PBWIsImporterURL(NSURL *url) {
+    return [url isKindOfClass:NSURL.class] &&
+        [url.scheme caseInsensitiveCompare:@"pbwallpaperimporter"] == NSOrderedSame;
 }
 
-static UIView *PBWWallpaperHost(void) {
-    for (UIWindow *window in [UIApplication sharedApplication].windows) {
-        if ([NSStringFromClass(window.class) isEqualToString:@"_SBWallpaperSecureWindow"] && window.subviews.count) {
-            return window.subviews.firstObject;
-        }
-    }
-    return nil;
+static void PBWForwardModernURLToLegacyHandler(
+    id target,
+    NSURL *url,
+    id application,
+    BOOL animated,
+    id activationSettings,
+    id origin,
+    id result
+) {
+    SEL legacy = NSSelectorFromString(@"applicationOpenURL:withApplication:animating:activationSettings:origin:notifyLSOnFailure:withResult:");
+    if (![target respondsToSelector:legacy]) return;
+
+    typedef void (*LegacyHandler)(id, SEL, NSURL *, id, BOOL, id, id, BOOL, id);
+    ((LegacyHandler)objc_msgSend)(
+        target,
+        legacy,
+        url,
+        application,
+        animated,
+        activationSettings,
+        origin,
+        NO,
+        result
+    );
 }
 
-static NSUserDefaults *PBWPreferences(void) {
-    return [[NSUserDefaults alloc] initWithSuiteName:kPreferencesDomain];
-}
+%hook SpringBoard
 
-static NSString *PBWActiveWallpaperPath(NSUserDefaults *preferences) {
-    NSString *dataRoot = [preferences stringForKey:@"PBWDataRootPath"];
-    if ([dataRoot isKindOfClass:NSString.class]) {
-        NSString *marker = [dataRoot stringByAppendingPathComponent:@".pbwactive"];
-        NSString *path = [NSString stringWithContentsOfFile:marker encoding:NSUTF8StringEncoding error:nil];
-        path = [path stringByTrimmingCharactersInSet:NSCharacterSet.whitespaceAndNewlineCharacterSet];
-        if (path.length && [[NSFileManager defaultManager] fileExistsAtPath:path]) {
-            return path;
-        }
-    }
-
-    NSString *path = [preferences stringForKey:@"pbWallpaperPath"];
-    return [[NSFileManager defaultManager] fileExistsAtPath:path] ? path : nil;
-}
-
-static id PBWRenderer(void) {
-    return [PBWWallpaperHost() viewWithTag:kRendererTag];
-}
-
-static void PBWApplyLockState(BOOL locked, BOOL force) {
-    if (!PBWIsMainThread()) {
-        dispatch_async(dispatch_get_main_queue(), ^{
-            PBWApplyLockState(locked, force);
-        });
+- (void)_applicationOpenURL:(NSURL *)url
+            withApplication:(id)application
+                   animating:(BOOL)animated
+          activationSettings:(id)activationSettings
+                      origin:(id)origin
+                  withResult:(id)result {
+    if (PBWIsImporterURL(url)) {
+        PBWForwardModernURLToLegacyHandler(self, url, application, animated, activationSettings, origin, result);
         return;
     }
-
-    id renderer = PBWRenderer();
-    if (renderer == nil) {
-        PBWInstallRenderer();
-        renderer = PBWRenderer();
-    }
-    SEL selector = NSSelectorFromString(@"PBWMethod011:");
-    if (renderer == nil || ![renderer respondsToSelector:selector]) {
-        return;
-    }
-    if (!force && rendererStateKnown && rendererLocked == locked) {
-        return;
-    }
-
-    ((void (*)(id, SEL, BOOL))objc_msgSend)(renderer, selector, locked);
-    rendererStateKnown = YES;
-    rendererLocked = locked;
-}
-
-static void PBWApplyCoverSheetProgress(double progress) {
-    // UIKit invokes this selector from its animation-manager thread on iOS 16.
-    // The native renderer mutates views/layers, so it must only run on main.
-    if (!PBWIsMainThread()) {
-        dispatch_async(dispatch_get_main_queue(), ^{
-            PBWApplyCoverSheetProgress(progress);
-        });
-        return;
-    }
-
-    id renderer = PBWRenderer();
-    if (renderer == nil) {
-        PBWInstallRenderer();
-        renderer = PBWRenderer();
-    }
-    SEL selector = NSSelectorFromString(@"PBWMethod012:");
-    if (renderer != nil && [renderer respondsToSelector:selector]) {
-        ((void (*)(id, SEL, double))objc_msgSend)(renderer, selector, progress);
-    }
-}
-
-static void PBWRemoveRenderer(void) {
-    [PBWRenderer() removeFromSuperview];
-    rendererStateKnown = NO;
-}
-
-static void PBWInstallRenderer(void) {
-    if (!PBWIsMainThread()) {
-        dispatch_async(dispatch_get_main_queue(), ^{
-            PBWInstallRenderer();
-        });
-        return;
-    }
-
-    NSUserDefaults *preferences = PBWPreferences();
-    if (![preferences boolForKey:@"PBWallpaperEnabled"]) {
-        PBWRemoveRenderer();
-        return;
-    }
-
-    NSString *wallpaperPath = PBWActiveWallpaperPath(preferences);
-    UIView *host = PBWWallpaperHost();
-    Class rendererClass = NSClassFromString(@"hpebutktbedt");
-    SEL loader = NSSelectorFromString(@"PBWMethod009:PBWMethod010:");
-    if (wallpaperPath == nil || host == nil || rendererClass == Nil) {
-        if (retryCount++ < 20) {
-            dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(500 * NSEC_PER_MSEC)), dispatch_get_main_queue(), ^{
-                PBWInstallRenderer();
-            });
-        }
-        return;
-    }
-
-    retryCount = 0;
-    PBWRemoveRenderer();
-
-    UIView *renderer = [[rendererClass alloc] initWithFrame:host.bounds];
-    if (renderer == nil || ![renderer respondsToSelector:loader]) {
-        return;
-    }
-
-    renderer.tag = kRendererTag;
-    renderer.autoresizingMask = UIViewAutoresizingFlexibleWidth | UIViewAutoresizingFlexibleHeight;
-    renderer.userInteractionEnabled = NO;
-    renderer.clipsToBounds = YES;
-    [host addSubview:renderer];
-
-    // PBWMethod010 is the native loader's numeric presentation mode. Passing
-    // the manifest dictionary here prevents the original model builder from
-    // running on arm64e. Mode 0 is the importer/original default path.
-    ((void (*)(id, SEL, id, uint64_t))objc_msgSend)(renderer, loader, wallpaperPath, 0);
-    PBWApplyLockState(rendererStateKnown ? rendererLocked : NO, YES);
-}
-
-static void PBWPreferencesChanged(CFNotificationCenterRef center, void *observer, CFStringRef name, const void *object, CFDictionaryRef userInfo) {
-    dispatch_async(dispatch_get_main_queue(), ^{
-        retryCount = 0;
-        PBWInstallRenderer();
-    });
-}
-
-%ctor {
-    CFNotificationCenterAddObserver(CFNotificationCenterGetDarwinNotifyCenter(), NULL, PBWPreferencesChanged, kPreferencesChanged, NULL, CFNotificationSuspensionBehaviorDeliverImmediately);
-    dispatch_async(dispatch_get_main_queue(), ^{
-        PBWInstallRenderer();
-    });
-}
-
-%hook SBLockScreenManager
-
-- (void)_reallySetUILocked:(BOOL)locked {
     %orig;
-    PBWApplyLockState(locked, NO);
-}
-
-%end
-
-%hook SBCoverSheetPresentationManager
-
-- (void)coverSheetSlidingViewController:(id)controller animationTickedWithProgress:(double)progress velocity:(double)velocity coverSheetFrame:(CGRect)frame gestureActive:(BOOL)gestureActive forPresentationValue:(BOOL)presentationValue {
-    %orig;
-    PBWApplyCoverSheetProgress(progress);
 }
 
 %end

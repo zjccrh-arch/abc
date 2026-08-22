@@ -1,8 +1,8 @@
 Package: com.charlieleung.pbwallpapercompat
-Name: PBWallpaper Native Renderer Bridge
-Version: 2.2.6
+Name: PBWallpaper iOS 16 URL Bridge
+Version: 2.3.0
 Architecture: iphoneos-arm64e
-Description: iOS 16 lifecycle bridge for PBWallpaper's native renderer
+Description: iOS 16 URL lifecycle bridge for PBWallpaper
 Maintainer: local
 Author: local
 Section: Tweaks
