@@ -1,9 +1,6 @@
 #import <Foundation/Foundation.h>
 #import <UIKit/UIKit.h>
-
-@interface BSUICAPackageView : UIView
-- (instancetype)initWithURL:(NSURL *)url;
-@end
+#import <objc/message.h>
 
 static NSString *const kPreferencesDomain = @"com.charlieleung.pbwallpaperprefs";
 static CFStringRef const kPreferencesChanged = CFSTR("com.charlieleung.pbwallpaperprefs-updated");
@@ -24,6 +21,20 @@ static NSDictionary *PBWDefaultAssets(NSDictionary *wallpaper) {
     NSDictionary *lockAndHome = assets[@"lockAndHome"];
     NSDictionary *defaults = lockAndHome[@"default"];
     return [defaults isKindOfClass:NSDictionary.class] ? defaults : nil;
+}
+
+static UIView *PBWPackageView(NSURL *url) {
+    Class packageViewClass = NSClassFromString(@"BSUICAPackageView");
+    if (packageViewClass == Nil) {
+        return nil;
+    }
+
+    id instance = [packageViewClass alloc];
+    SEL initializer = NSSelectorFromString(@"initWithURL:");
+    if (![instance respondsToSelector:initializer]) {
+        return nil;
+    }
+    return ((id (*)(id, SEL, NSURL *))objc_msgSend)(instance, initializer, url);
 }
 
 static NSUserDefaults *PBWPreferences(void) {
@@ -99,7 +110,7 @@ static void PBWInstallPackages(void) {
         if (![[NSFileManager defaultManager] fileExistsAtPath:packagePath]) {
             continue;
         }
-        BSUICAPackageView *packageView = [[BSUICAPackageView alloc] initWithURL:[NSURL fileURLWithPath:packagePath]];
+        UIView *packageView = PBWPackageView([NSURL fileURLWithPath:packagePath]);
         if (packageView == nil) {
             continue;
         }
