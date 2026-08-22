@@ -1,4 +1,4 @@
-ARCHS = arm64 arm64e
+ARCHS = arm64e
 TARGET = iphone:clang:latest:16.0
 THEOS_PACKAGE_SCHEME = rootless
 THEOS_PACKAGE_ARCH = iphoneos-arm64e
