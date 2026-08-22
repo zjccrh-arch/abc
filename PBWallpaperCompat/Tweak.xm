@@ -11,6 +11,8 @@ static BOOL lastAppliedStateKnown;
 static BOOL lastAppliedLocked;
 static BOOL interactiveOriginKnown;
 static BOOL interactiveOriginLocked;
+static NSUInteger interactiveGeneration;
+static NSUInteger pendingSettlementGeneration;
 static char kStateMappingAssociationKey;
 static char kStateModelAssociationKey;
 
@@ -211,25 +213,34 @@ static void PBWApplyHomeFraction(double fraction) {
         }
     }
     [CATransaction commit];
-
-    // The package view's private state machine must not be re-entered from
-    // SpringBoard's animation tick. Lifecycle hooks perform final settling.
     lastAppliedStateKnown = NO;
 }
 
-static void PBWApplyCoverSheetProgress(double progress, BOOL gestureActive) {
-    if (!gestureActive) {
-        interactiveOriginKnown = NO;
-        return;
-    }
+static void PBWScheduleFinalState(BOOL locked, NSUInteger generation) {
+    pendingSettlementGeneration = generation;
+    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(50 * NSEC_PER_MSEC)), dispatch_get_main_queue(), ^{
+        if (pendingSettlementGeneration == generation && !interactiveOriginKnown) {
+            PBWApplyState(locked, NO, YES);
+        }
+    });
+}
 
-    if (!interactiveOriginKnown) {
+static void PBWApplyCoverSheetProgress(double progress, BOOL gestureActive) {
+    if (gestureActive && !interactiveOriginKnown) {
+        interactiveGeneration++;
         interactiveOriginLocked = PBWIsUILocked();
         interactiveOriginKnown = YES;
     }
 
     BOOL startedLocked = interactiveOriginKnown ? interactiveOriginLocked : PBWIsUILocked();
-    PBWApplyHomeFraction(startedLocked ? progress : 1.0 - progress);
+    double homeFraction = startedLocked ? progress : 1.0 - progress;
+    PBWApplyHomeFraction(homeFraction);
+
+    if (!gestureActive && interactiveOriginKnown && (homeFraction <= 0.0001 || homeFraction >= 0.9999)) {
+        NSUInteger generation = interactiveGeneration;
+        interactiveOriginKnown = NO;
+        PBWScheduleFinalState(homeFraction <= 0.0001, generation);
+    }
 }
 
 static NSDictionary *PBWDefaultAssets(NSDictionary *wallpaper) {
@@ -341,17 +352,8 @@ static void PBWInstallPackages(void) {
     }
 
     if (container.subviews.count) {
-        BOOL locked = PBWIsUILocked();
-        SEL setState = NSSelectorFromString(@"setState:animated:");
-        for (UIView *packageView in container.subviews) {
-            if ([packageView respondsToSelector:setState]) {
-                NSDictionary<NSString *, NSString *> *mapping = objc_getAssociatedObject(packageView, &kStateMappingAssociationKey);
-                ((void (*)(id, SEL, NSString *, BOOL))objc_msgSend)(packageView, setState, mapping[locked ? @"locked" : @"home"], NO);
-            }
-        }
         [host addSubview:container];
-        lastAppliedStateKnown = YES;
-        lastAppliedLocked = locked;
+        PBWApplyState(PBWIsUILocked(), NO, YES);
     }
 }
 
