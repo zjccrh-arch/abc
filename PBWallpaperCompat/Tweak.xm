@@ -146,16 +146,6 @@ static void PBWInstallRenderer(void) {
     // running on arm64e. Mode 0 is the importer/original default path.
     ((void (*)(id, SEL, id, uint64_t))objc_msgSend)(renderer, loader, wallpaperPath, 0);
     PBWApplyLockState(rendererStateKnown ? rendererLocked : NO, YES);
-
-    // The internal loader has no public failure result. Do not leave its empty
-    // video fallback over SpringBoard when the native model was not created.
-    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(300 * NSEC_PER_MSEC)), dispatch_get_main_queue(), ^{
-        SEL modelSelector = NSSelectorFromString(@"PBWProperty040");
-        if ([renderer respondsToSelector:modelSelector] &&
-            ((id (*)(id, SEL))objc_msgSend)(renderer, modelSelector) == nil) {
-            [renderer removeFromSuperview];
-        }
-    });
 }
 
 static void PBWPreferencesChanged(CFNotificationCenterRef center, void *observer, CFStringRef name, const void *object, CFDictionaryRef userInfo) {
