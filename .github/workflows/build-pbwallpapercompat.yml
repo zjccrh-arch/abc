@@ -23,6 +23,8 @@ jobs:
           git clone https://github.com/theos/sdks.git "$HOME/theos/sdks"
       - name: Build package
         run: THEOS="$HOME/theos" gmake package FINALPACKAGE=1
+      - name: Normalize RootHide architecture
+        run: python3 rewrite_deb_architecture.py packages/*.deb iphoneos-arm64e
       - name: Verify package
         run: |
           test -n "$(find packages -name '*.deb' -print -quit)"
