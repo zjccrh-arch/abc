@@ -1,8 +1,10 @@
 #import <Foundation/Foundation.h>
 #import <objc/runtime.h>
 #import <substrate.h>
+#include <dlfcn.h>
 #include <stdio.h>
 #include <stdarg.h>
+#include <string.h>
 
 static void (*OriginalMSHookMessageEx)(Class, SEL, IMP, IMP *);
 extern "C" __attribute__((visibility("default"))) char PBWProbeLog[4096];
@@ -36,8 +38,15 @@ static void WriteProbeStatus(const char *status, const void *value) {
     AppendProbeLine("status=%s value=%p\n", status, value);
 }
 
+static bool IsPBWallpaperCaller(void *returnAddress) {
+    Dl_info image = {};
+    return dladdr(returnAddress, &image) != 0 && image.dli_fname != nullptr && strstr(image.dli_fname, "PBWallpaper.dylib") != nullptr;
+}
+
 static void ProbeMSHookMessageEx(Class targetClass, SEL selector, IMP replacement, IMP *original) {
-    WriteProbeLine(targetClass, selector, replacement, original);
+    if (IsPBWallpaperCaller(__builtin_return_address(0))) {
+        WriteProbeLine(targetClass, selector, replacement, original);
+    }
     OriginalMSHookMessageEx(targetClass, selector, replacement, original);
 }
 

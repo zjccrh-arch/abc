@@ -1,6 +1,6 @@
 Package: com.charlieleung.pbwallpaperhookprobe
 Name: PBWallpaper Hook Probe
-Version: 1.0.2
+Version: 1.0.3
 Architecture: iphoneos-arm64e
 Description: One-shot hook-registration diagnostic for PBWallpaper
 Maintainer: local
