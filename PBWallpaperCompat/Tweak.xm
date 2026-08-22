@@ -7,6 +7,8 @@ static NSString *const kPreferencesDomain = @"com.charlieleung.pbwallpaperprefs"
 static CFStringRef const kPreferencesChanged = CFSTR("com.charlieleung.pbwallpaperprefs-updated");
 static NSInteger const kContainerTag = 0x50425716;
 static NSUInteger retryCount;
+static BOOL lastAppliedStateKnown;
+static BOOL lastAppliedLocked;
 static char kStateMappingAssociationKey;
 
 static UIView *PBWWallpaperHost(void) {
@@ -44,6 +46,13 @@ static NSDictionary<NSString *, NSString *> *PBWStateMappingForPackage(NSString 
 
 static void PBWApplyState(BOOL locked, BOOL animated) {
     UIView *container = [PBWWallpaperHost() viewWithTag:kContainerTag];
+    if (container == nil || !container.subviews.count) {
+        return;
+    }
+    if (lastAppliedStateKnown && lastAppliedLocked == locked) {
+        return;
+    }
+
     SEL setState = NSSelectorFromString(@"setState:animated:");
     for (UIView *packageView in container.subviews) {
         if ([packageView respondsToSelector:setState]) {
@@ -52,6 +61,8 @@ static void PBWApplyState(BOOL locked, BOOL animated) {
             ((void (*)(id, SEL, NSString *, BOOL))objc_msgSend)(packageView, setState, state, animated);
         }
     }
+    lastAppliedStateKnown = YES;
+    lastAppliedLocked = locked;
 }
 
 static NSDictionary *PBWDefaultAssets(NSDictionary *wallpaper) {
@@ -98,6 +109,7 @@ static NSString *PBWActiveWallpaperPath(NSUserDefaults *preferences) {
 static void PBWRemoveContainer(void) {
     UIView *host = PBWWallpaperHost();
     [[host viewWithTag:kContainerTag] removeFromSuperview];
+    lastAppliedStateKnown = NO;
 }
 
 static void PBWInstallPackages(void) {
@@ -127,6 +139,7 @@ static void PBWInstallPackages(void) {
 
     retryCount = 0;
     [[host viewWithTag:kContainerTag] removeFromSuperview];
+    lastAppliedStateKnown = NO;
 
     UIView *container = [[UIView alloc] initWithFrame:host.bounds];
     container.tag = kContainerTag;
@@ -181,11 +194,19 @@ static void PBWPreferencesChanged(CFNotificationCenterRef center, void *observer
 
 %hook SBLockScreenManager
 
-- (void)_reallySetUILocked:(BOOL)locked {
+- (void)lockScreenViewControllerWillPresent {
+    PBWApplyState(YES, YES);
     %orig;
-    dispatch_async(dispatch_get_main_queue(), ^{
-        PBWApplyState(locked, YES);
-    });
+}
+
+- (void)lockScreenViewControllerWillDismiss {
+    PBWApplyState(NO, YES);
+    %orig;
+}
+
+- (void)_reallySetUILocked:(BOOL)locked {
+    PBWApplyState(locked, YES);
+    %orig;
 }
 
 %end
