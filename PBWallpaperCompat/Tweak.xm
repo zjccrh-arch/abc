@@ -126,9 +126,19 @@ static void PBWInstallRenderer(void) {
     renderer.clipsToBounds = YES;
     [host addSubview:renderer];
 
-    // PBWallpaper forwards this unmodified configuration object into its native model builder.
+    // This provisional bridge is removed unless the native loader produces a model.
     ((void (*)(id, SEL, id, id))objc_msgSend)(renderer, loader, wallpaperPath, configuration);
     PBWApplyLockState(PBWIsUILocked(), YES);
+
+    // The internal loader has no public failure result. Do not leave its empty
+    // video fallback over SpringBoard when the native model was not created.
+    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(300 * NSEC_PER_MSEC)), dispatch_get_main_queue(), ^{
+        SEL modelSelector = NSSelectorFromString(@"PBWProperty040");
+        if ([renderer respondsToSelector:modelSelector] &&
+            ((id (*)(id, SEL))objc_msgSend)(renderer, modelSelector) == nil) {
+            [renderer removeFromSuperview];
+        }
+    });
 }
 
 static void PBWPreferencesChanged(CFNotificationCenterRef center, void *observer, CFStringRef name, const void *object, CFDictionaryRef userInfo) {
