@@ -107,21 +107,6 @@ static UIView *PBWWallpaperHost(void) {
     return nil;
 }
 
-static BOOL PBWIsUILocked(void) {
-    Class managerClass = NSClassFromString(@"SBLockScreenManager");
-    SEL sharedInstance = NSSelectorFromString(@"sharedInstance");
-    SEL isUILocked = NSSelectorFromString(@"isUILocked");
-    if (managerClass == Nil || ![managerClass respondsToSelector:sharedInstance]) {
-        return NO;
-    }
-
-    id manager = ((id (*)(id, SEL))objc_msgSend)(managerClass, sharedInstance);
-    if (manager == nil || ![manager respondsToSelector:isUILocked]) {
-        return NO;
-    }
-    return ((BOOL (*)(id, SEL))objc_msgSend)(manager, isUILocked);
-}
-
 static NSDictionary<NSString *, NSString *> *PBWStateMappingForPackage(NSString *packagePath) {
     NSString *documentPath = [packagePath stringByAppendingPathComponent:@"main.caml"];
     NSString *document = [NSString stringWithContentsOfFile:documentPath encoding:NSUTF8StringEncoding error:nil];
