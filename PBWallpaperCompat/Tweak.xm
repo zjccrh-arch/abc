@@ -10,6 +10,8 @@ static NSUInteger retryCount;
 static BOOL rendererStateKnown;
 static BOOL rendererLocked;
 
+static void PBWInstallRenderer(void);
+
 static UIView *PBWWallpaperHost(void) {
     for (UIWindow *window in [UIApplication sharedApplication].windows) {
         if ([NSStringFromClass(window.class) isEqualToString:@"_SBWallpaperSecureWindow"] && window.subviews.count) {
@@ -58,6 +60,10 @@ static id PBWRenderer(void) {
 
 static void PBWApplyLockState(BOOL locked, BOOL force) {
     id renderer = PBWRenderer();
+    if (renderer == nil) {
+        PBWInstallRenderer();
+        renderer = PBWRenderer();
+    }
     SEL selector = NSSelectorFromString(@"PBWMethod011:");
     if (renderer == nil || ![renderer respondsToSelector:selector]) {
         return;
@@ -73,6 +79,10 @@ static void PBWApplyLockState(BOOL locked, BOOL force) {
 
 static void PBWApplyCoverSheetProgress(double progress) {
     id renderer = PBWRenderer();
+    if (renderer == nil) {
+        PBWInstallRenderer();
+        renderer = PBWRenderer();
+    }
     SEL selector = NSSelectorFromString(@"PBWMethod012:");
     if (renderer != nil && [renderer respondsToSelector:selector]) {
         ((void (*)(id, SEL, double))objc_msgSend)(renderer, selector, progress);
