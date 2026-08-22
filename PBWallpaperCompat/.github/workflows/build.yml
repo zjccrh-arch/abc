@@ -1,0 +1,30 @@
+name: Build PBWallpaperCompat
+
+on:
+  push:
+    branches: [master]
+  workflow_dispatch:
+
+jobs:
+  package:
+    runs-on: macos-14
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install Theos and iPhoneOS SDK
+        run: |
+          git clone --depth=1 --recursive https://github.com/theos/theos.git "$RUNNER_TEMP/theos"
+          git clone --depth=1 https://github.com/theos/sdks.git "$RUNNER_TEMP/theos/sdks"
+      - name: Build package
+        env:
+          THEOS: ${{ runner.temp }}/theos
+        run: make package FINALPACKAGE=1
+      - name: Verify package
+        run: |
+          test -n "$(find packages -name '*.deb' -type f -print -quit)"
+          find packages -name '*.deb' -type f -exec shasum -a 256 {} \; | tee SHA256SUMS
+      - uses: actions/upload-artifact@v4
+        with:
+          name: PBWallpaperCompat-deb
+          path: |
+            packages/*.deb
+            SHA256SUMS
