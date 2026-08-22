@@ -1,6 +1,6 @@
 Package: com.charlieleung.pbwallpapercompat
 Name: PBWallpaper iOS 16 Compatibility
-Version: 2.0.1
+Version: 2.0.2
 Architecture: iphoneos-arm64e
 Description: Native PBWallpaper renderer bridge for iOS 16
 Maintainer: local

@@ -8,6 +8,8 @@ static CFStringRef const kPreferencesChanged = CFSTR("com.charlieleung.pbwallpap
 static NSInteger const kRendererTag = 0x50425720;
 static NSUInteger retryCount;
 static double lastCoverSheetProgress = -1.0;
+static BOOL hasQueuedCoverSheetProgress;
+static double queuedCoverSheetProgress;
 
 static UIView *PBWLegacyWallpaperHost(void) {
     for (UIWindow *window in [UIApplication sharedApplication].windows) {
@@ -59,6 +61,30 @@ static void PBWApplyCoverSheetProgress(double progress) {
     ((void (*)(id, SEL, double))objc_msgSend)(renderer, applyFraction, progress);
 }
 
+static void PBWQueueCoverSheetProgress(double progress) {
+    if ([NSThread isMainThread]) {
+        PBWApplyCoverSheetProgress(progress);
+        return;
+    }
+
+    @synchronized ([UIApplication class]) {
+        queuedCoverSheetProgress = progress;
+        if (hasQueuedCoverSheetProgress) {
+            return;
+        }
+        hasQueuedCoverSheetProgress = YES;
+    }
+
+    dispatch_async(dispatch_get_main_queue(), ^{
+        double queuedProgress;
+        @synchronized ([UIApplication class]) {
+            queuedProgress = queuedCoverSheetProgress;
+            hasQueuedCoverSheetProgress = NO;
+        }
+        PBWApplyCoverSheetProgress(queuedProgress);
+    });
+}
+
 static void PBWInstallNativeRenderer(void) {
     if (!PBWEnabled()) {
         PBWRemoveRenderer();
@@ -99,25 +125,14 @@ static void PBWInstallNativeRenderer(void) {
     }
 }
 
-%hook SBCoverSheetPresentationManager
+%hook CSCoverSheetViewController
 
-- (void)coverSheetSlidingViewController:(id)controller
-             animationTickedWithProgress:(double)progress
-                                velocity:(double)velocity
-                         coverSheetFrame:(CGRect)frame
-                           gestureActive:(BOOL)gestureActive
-                    forPresentationValue:(NSInteger)presentationValue {
+- (void)overlayController:(id)controller
+didChangePresentationProgress:(double)previousPresentationProgress
+newPresentationProgress:(double)newPresentationProgress
+                fromLeading:(BOOL)fromLeading {
     %orig;
-    PBWApplyCoverSheetProgress(progress);
-}
-
-- (void)_setTransitionProgress:(double)progress
-                       animated:(BOOL)animated
-                  gestureActive:(BOOL)gestureActive
-            coverSheetProgress:(double)coverSheetProgress
-                     completion:(id)completion {
-    %orig;
-    PBWApplyCoverSheetProgress(coverSheetProgress);
+    PBWQueueCoverSheetProgress(newPresentationProgress);
 }
 
 %end
