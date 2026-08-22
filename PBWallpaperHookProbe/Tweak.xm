@@ -1,40 +1,39 @@
 #import <Foundation/Foundation.h>
 #import <objc/runtime.h>
 #import <substrate.h>
-#include <fcntl.h>
 #include <stdio.h>
-#include <unistd.h>
+#include <stdarg.h>
 
 static void (*OriginalMSHookMessageEx)(Class, SEL, IMP, IMP *);
+extern "C" __attribute__((visibility("default"))) char PBWProbeLog[4096];
+char PBWProbeLog[4096];
+static size_t ProbeLogLength;
+
+static void AppendProbeLine(const char *format, ...) {
+    if (ProbeLogLength >= sizeof(PBWProbeLog) - 1) return;
+    va_list arguments;
+    va_start(arguments, format);
+    int length = vsnprintf(PBWProbeLog + ProbeLogLength, sizeof(PBWProbeLog) - ProbeLogLength, format, arguments);
+    va_end(arguments);
+    if (length <= 0) return;
+    size_t available = sizeof(PBWProbeLog) - ProbeLogLength;
+    ProbeLogLength += (size_t)length < available ? (size_t)length : available - 1;
+}
 
 static void WriteProbeLine(Class targetClass, SEL selector, IMP replacement, IMP *original) {
-    char line[768];
     const char *className = targetClass ? class_getName(targetClass) : "<nil>";
     const char *selectorName = selector ? sel_getName(selector) : "<nil>";
-    int length = snprintf(
-        line,
-        sizeof(line),
+    AppendProbeLine(
         "class=%s selector=%s replacement=%p originalSlot=%p\n",
         className ?: "<null>",
         selectorName ?: "<null>",
         replacement,
         original
     );
-    if (length <= 0) return;
-    int fd = open("/var/mobile/pbw-hook-probe.log", O_WRONLY | O_CREAT | O_APPEND, 0644);
-    if (fd < 0) return;
-    write(fd, line, (size_t)length);
-    close(fd);
 }
 
 static void WriteProbeStatus(const char *status, const void *value) {
-    char line[256];
-    int length = snprintf(line, sizeof(line), "status=%s value=%p\n", status, value);
-    if (length <= 0) return;
-    int fd = open("/var/mobile/pbw-hook-probe.log", O_WRONLY | O_CREAT | O_APPEND, 0644);
-    if (fd < 0) return;
-    write(fd, line, (size_t)length);
-    close(fd);
+    AppendProbeLine("status=%s value=%p\n", status, value);
 }
 
 static void ProbeMSHookMessageEx(Class targetClass, SEL selector, IMP replacement, IMP *original) {
@@ -43,7 +42,6 @@ static void ProbeMSHookMessageEx(Class targetClass, SEL selector, IMP replacemen
 }
 
 %ctor {
-    unlink("/var/mobile/pbw-hook-probe.log");
     WriteProbeStatus("constructor", (const void *)MSHookMessageEx);
     MSHookFunction(
         (void *)MSHookMessageEx,
