@@ -16,6 +16,32 @@ static UIView *PBWWallpaperHost(void) {
     return nil;
 }
 
+static BOOL PBWIsUILocked(void) {
+    Class managerClass = NSClassFromString(@"SBLockScreenManager");
+    SEL sharedInstance = NSSelectorFromString(@"sharedInstance");
+    SEL isUILocked = NSSelectorFromString(@"isUILocked");
+    if (managerClass == Nil || ![managerClass respondsToSelector:sharedInstance]) {
+        return NO;
+    }
+
+    id manager = ((id (*)(id, SEL))objc_msgSend)(managerClass, sharedInstance);
+    if (manager == nil || ![manager respondsToSelector:isUILocked]) {
+        return NO;
+    }
+    return ((BOOL (*)(id, SEL))objc_msgSend)(manager, isUILocked);
+}
+
+static void PBWApplyState(BOOL locked, BOOL animated) {
+    UIView *container = [PBWWallpaperHost() viewWithTag:kContainerTag];
+    SEL setState = NSSelectorFromString(@"setState:animated:");
+    NSString *state = locked ? @"Lock PortraitUp" : @"Home PortraitUp";
+    for (UIView *packageView in container.subviews) {
+        if ([packageView respondsToSelector:setState]) {
+            ((void (*)(id, SEL, NSString *, BOOL))objc_msgSend)(packageView, setState, state, animated);
+        }
+    }
+}
+
 static NSDictionary *PBWDefaultAssets(NSDictionary *wallpaper) {
     NSDictionary *assets = wallpaper[@"assets"];
     NSDictionary *lockAndHome = assets[@"lockAndHome"];
@@ -122,6 +148,7 @@ static void PBWInstallPackages(void) {
 
     if (container.subviews.count) {
         [host addSubview:container];
+        PBWApplyState(PBWIsUILocked(), NO);
     }
 }
 
@@ -138,3 +165,14 @@ static void PBWPreferencesChanged(CFNotificationCenterRef center, void *observer
         PBWInstallPackages();
     });
 }
+
+%hook SBLockScreenManager
+
+- (void)_reallySetUILocked:(BOOL)locked {
+    %orig;
+    dispatch_async(dispatch_get_main_queue(), ^{
+        PBWApplyState(locked, YES);
+    });
+}
+
+%end
