@@ -9,7 +9,92 @@ static NSInteger const kContainerTag = 0x50425716;
 static NSUInteger retryCount;
 static BOOL lastAppliedStateKnown;
 static BOOL lastAppliedLocked;
+static BOOL interactiveOriginKnown;
+static BOOL interactiveOriginLocked;
 static char kStateMappingAssociationKey;
+static char kStateModelAssociationKey;
+
+@interface PBWStateModel : NSObject <NSXMLParserDelegate>
+@property(nonatomic, strong) NSMutableDictionary<NSString *, NSArray<NSNumber *> *> *layerPaths;
+@property(nonatomic, strong) NSMutableDictionary<NSString *, NSMutableDictionary<NSString *, NSMutableDictionary<NSString *, NSNumber *> *> *> *states;
+@property(nonatomic, strong) NSMutableArray<NSArray<NSNumber *> *> *layerStack;
+@property(nonatomic, strong) NSMutableArray<NSNumber *> *childCounts;
+@property(nonatomic, copy) NSString *currentState;
+@property(nonatomic, copy) NSString *currentTarget;
+@property(nonatomic, copy) NSString *currentKeyPath;
+@end
+
+@implementation PBWStateModel
+
+- (instancetype)init {
+    self = [super init];
+    if (self) {
+        _layerPaths = [NSMutableDictionary dictionary];
+        _states = [NSMutableDictionary dictionary];
+        _layerStack = [NSMutableArray array];
+        _childCounts = [NSMutableArray array];
+    }
+    return self;
+}
+
+- (void)parser:(NSXMLParser *)parser didStartElement:(NSString *)elementName namespaceURI:(NSString *)namespaceURI qualifiedName:(NSString *)qualifiedName attributes:(NSDictionary<NSString *, NSString *> *)attributes {
+    if ([elementName isEqualToString:@"CALayer"]) {
+        NSArray<NSNumber *> *path = nil;
+        if (self.layerStack.count == 0) {
+            path = @[];
+        } else {
+            NSUInteger childIndex = self.childCounts.lastObject.unsignedIntegerValue;
+            self.childCounts[self.childCounts.count - 1] = @(childIndex + 1);
+            path = [self.layerStack.lastObject arrayByAddingObject:@(childIndex)];
+        }
+        [self.layerStack addObject:path];
+        [self.childCounts addObject:@0];
+        NSString *identifier = attributes[@"id"];
+        if (identifier.length) {
+            self.layerPaths[identifier] = path;
+        }
+        return;
+    }
+    if ([elementName isEqualToString:@"LKState"]) {
+        self.currentState = attributes[@"name"];
+        return;
+    }
+    if ([elementName isEqualToString:@"LKStateSetValue"]) {
+        self.currentTarget = attributes[@"targetId"];
+        self.currentKeyPath = attributes[@"keyPath"];
+        return;
+    }
+    if ([elementName isEqualToString:@"value"] && self.currentState.length && self.currentTarget.length && self.currentKeyPath.length) {
+        NSString *rawValue = attributes[@"value"];
+        if (rawValue.length) {
+            NSMutableDictionary *state = self.states[self.currentState];
+            if (state == nil) {
+                state = [NSMutableDictionary dictionary];
+                self.states[self.currentState] = state;
+            }
+            NSMutableDictionary *target = state[self.currentTarget];
+            if (target == nil) {
+                target = [NSMutableDictionary dictionary];
+                state[self.currentTarget] = target;
+            }
+            target[self.currentKeyPath] = @([rawValue doubleValue]);
+        }
+    }
+}
+
+- (void)parser:(NSXMLParser *)parser didEndElement:(NSString *)elementName namespaceURI:(NSString *)namespaceURI qualifiedName:(NSString *)qualifiedName {
+    if ([elementName isEqualToString:@"CALayer"]) {
+        [self.layerStack removeLastObject];
+        [self.childCounts removeLastObject];
+    } else if ([elementName isEqualToString:@"LKStateSetValue"]) {
+        self.currentTarget = nil;
+        self.currentKeyPath = nil;
+    } else if ([elementName isEqualToString:@"LKState"]) {
+        self.currentState = nil;
+    }
+}
+
+@end
 
 static UIView *PBWWallpaperHost(void) {
     for (UIWindow *window in [UIApplication sharedApplication].windows) {
@@ -44,12 +129,12 @@ static NSDictionary<NSString *, NSString *> *PBWStateMappingForPackage(NSString 
     return @{ @"locked": @"Lock PortraitUp", @"home": @"Home PortraitUp" };
 }
 
-static void PBWApplyState(BOOL locked, BOOL animated) {
+static void PBWApplyState(BOOL locked, BOOL animated, BOOL force) {
     UIView *container = [PBWWallpaperHost() viewWithTag:kContainerTag];
     if (container == nil || !container.subviews.count) {
         return;
     }
-    if (lastAppliedStateKnown && lastAppliedLocked == locked) {
+    if (!force && lastAppliedStateKnown && lastAppliedLocked == locked) {
         return;
     }
 
@@ -63,6 +148,91 @@ static void PBWApplyState(BOOL locked, BOOL animated) {
     }
     lastAppliedStateKnown = YES;
     lastAppliedLocked = locked;
+}
+
+static PBWStateModel *PBWStateModelForPackage(NSString *packagePath) {
+    NSXMLParser *parser = [[NSXMLParser alloc] initWithContentsOfURL:[NSURL fileURLWithPath:[packagePath stringByAppendingPathComponent:@"main.caml"]]];
+    if (parser == nil) {
+        return nil;
+    }
+    PBWStateModel *model = [PBWStateModel new];
+    parser.delegate = model;
+    return [parser parse] ? model : nil;
+}
+
+static CALayer *PBWLayerAtPath(CALayer *packageLayer, NSArray<NSNumber *> *path) {
+    CALayer *layer = packageLayer.sublayers.firstObject;
+    for (NSNumber *component in path) {
+        NSArray<CALayer *> *children = layer.sublayers;
+        NSUInteger index = component.unsignedIntegerValue;
+        if (index >= children.count) {
+            return nil;
+        }
+        layer = children[index];
+    }
+    return layer;
+}
+
+static void PBWApplyHomeFraction(double fraction) {
+    fraction = MAX(0.0, MIN(1.0, fraction));
+    UIView *container = [PBWWallpaperHost() viewWithTag:kContainerTag];
+    if (container == nil) {
+        return;
+    }
+
+    [CATransaction begin];
+    [CATransaction setDisableActions:YES];
+    for (UIView *packageView in container.subviews) {
+        PBWStateModel *model = objc_getAssociatedObject(packageView, &kStateModelAssociationKey);
+        NSDictionary *locked = model.states[@"Locked"];
+        NSDictionary *unlocked = model.states[@"Unlock"];
+        if (locked.count == 0 || unlocked.count == 0) {
+            continue;
+        }
+        for (NSString *identifier in locked) {
+            NSDictionary<NSString *, NSNumber *> *fromValues = locked[identifier];
+            NSDictionary<NSString *, NSNumber *> *toValues = unlocked[identifier];
+            CALayer *layer = PBWLayerAtPath(packageView.layer, model.layerPaths[identifier]);
+            if (layer == nil || toValues == nil) {
+                continue;
+            }
+            for (NSString *keyPath in fromValues) {
+                NSNumber *from = fromValues[keyPath];
+                NSNumber *to = toValues[keyPath];
+                if (to == nil) {
+                    continue;
+                }
+                double value = from.doubleValue + (to.doubleValue - from.doubleValue) * fraction;
+                @try {
+                    [layer setValue:@(value) forKeyPath:keyPath];
+                } @catch (NSException *exception) {
+                }
+            }
+        }
+    }
+    [CATransaction commit];
+
+    if (fraction <= 0.0001) {
+        PBWApplyState(YES, NO, YES);
+    } else if (fraction >= 0.9999) {
+        PBWApplyState(NO, NO, YES);
+    } else {
+        lastAppliedStateKnown = NO;
+    }
+}
+
+static void PBWApplyCoverSheetProgress(double progress, BOOL gestureActive) {
+    if (gestureActive && !interactiveOriginKnown) {
+        interactiveOriginLocked = PBWIsUILocked();
+        interactiveOriginKnown = YES;
+    }
+
+    BOOL startedLocked = interactiveOriginKnown ? interactiveOriginLocked : PBWIsUILocked();
+    PBWApplyHomeFraction(startedLocked ? progress : 1.0 - progress);
+
+    if (!gestureActive && (progress <= 0.0001 || progress >= 0.9999)) {
+        interactiveOriginKnown = NO;
+    }
 }
 
 static NSDictionary *PBWDefaultAssets(NSDictionary *wallpaper) {
@@ -169,12 +339,13 @@ static void PBWInstallPackages(void) {
         packageView.autoresizingMask = UIViewAutoresizingFlexibleWidth | UIViewAutoresizingFlexibleHeight;
         packageView.userInteractionEnabled = NO;
         objc_setAssociatedObject(packageView, &kStateMappingAssociationKey, PBWStateMappingForPackage(packagePath), OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+        objc_setAssociatedObject(packageView, &kStateModelAssociationKey, PBWStateModelForPackage(packagePath), OBJC_ASSOCIATION_RETAIN_NONATOMIC);
         [container addSubview:packageView];
     }
 
     if (container.subviews.count) {
         [host addSubview:container];
-        PBWApplyState(PBWIsUILocked(), NO);
+        PBWApplyState(PBWIsUILocked(), NO, YES);
     }
 }
 
@@ -195,18 +366,27 @@ static void PBWPreferencesChanged(CFNotificationCenterRef center, void *observer
 %hook SBLockScreenManager
 
 - (void)lockScreenViewControllerWillPresent {
-    PBWApplyState(YES, YES);
+    PBWApplyState(YES, YES, NO);
     %orig;
 }
 
 - (void)lockScreenViewControllerWillDismiss {
-    PBWApplyState(NO, YES);
+    PBWApplyState(NO, YES, NO);
     %orig;
 }
 
 - (void)_reallySetUILocked:(BOOL)locked {
-    PBWApplyState(locked, YES);
+    PBWApplyState(locked, YES, NO);
     %orig;
+}
+
+%end
+
+%hook SBCoverSheetPresentationManager
+
+- (void)coverSheetSlidingViewController:(id)controller animationTickedWithProgress:(double)progress velocity:(double)velocity coverSheetFrame:(CGRect)frame gestureActive:(BOOL)gestureActive forPresentationValue:(BOOL)presentationValue {
+    %orig;
+    PBWApplyCoverSheetProgress(progress, gestureActive);
 }
 
 %end
