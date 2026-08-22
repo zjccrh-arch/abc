@@ -7,6 +7,9 @@ on:
       - "PBWallpaperHookProbe/**"
       - ".github/workflows/build-pbwallpaper-hook-probe.yml"
 
+permissions:
+  contents: write
+
 jobs:
   package:
     runs-on: macos-latest
@@ -30,3 +33,12 @@ jobs:
         with:
           name: PBWallpaperHookProbe-rootless
           path: PBWallpaperHookProbe/packages/*.deb
+      - name: Publish probe package
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: pbwallpaper-hook-probe-v1.0.0
+          name: PBWallpaper Hook Probe 1.0.0
+          prerelease: true
+          generate_release_notes: false
+          files: PBWallpaperHookProbe/packages/*.deb
+          fail_on_unmatched_files: true
