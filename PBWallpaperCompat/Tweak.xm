@@ -1,11 +1,13 @@
 #import <Foundation/Foundation.h>
 #import <UIKit/UIKit.h>
 #import <objc/message.h>
+#import <math.h>
 
 static NSString *const kPreferencesDomain = @"com.charlieleung.pbwallpaperprefs";
 static CFStringRef const kPreferencesChanged = CFSTR("com.charlieleung.pbwallpaperprefs-updated");
 static NSInteger const kRendererTag = 0x50425720;
 static NSUInteger retryCount;
+static double lastCoverSheetProgress = -1.0;
 
 static UIView *PBWLegacyWallpaperHost(void) {
     for (UIWindow *window in [UIApplication sharedApplication].windows) {
@@ -41,6 +43,22 @@ static void PBWRemoveRenderer(void) {
     [[PBWLegacyWallpaperHost() viewWithTag:kRendererTag] removeFromSuperview];
 }
 
+static void PBWApplyCoverSheetProgress(double progress) {
+    UIView *renderer = [PBWLegacyWallpaperHost() viewWithTag:kRendererTag];
+    SEL applyFraction = NSSelectorFromString(@"PBWBgApplyStateFraction:");
+    if (renderer == nil || ![renderer respondsToSelector:applyFraction]) {
+        return;
+    }
+
+    progress = MAX(0.0, MIN(1.0, progress));
+    if (fabs(progress - lastCoverSheetProgress) < 0.0001) {
+        return;
+    }
+
+    lastCoverSheetProgress = progress;
+    ((void (*)(id, SEL, double))objc_msgSend)(renderer, applyFraction, progress);
+}
+
 static void PBWInstallNativeRenderer(void) {
     if (!PBWEnabled()) {
         PBWRemoveRenderer();
@@ -62,6 +80,7 @@ static void PBWInstallNativeRenderer(void) {
     }
 
     retryCount = 0;
+    lastCoverSheetProgress = -1.0;
     [[host viewWithTag:kRendererTag] removeFromSuperview];
 
     UIView *renderer = [[rendererClass alloc] initWithFrame:host.bounds];
@@ -79,6 +98,29 @@ static void PBWInstallNativeRenderer(void) {
         ((void (*)(id, SEL, BOOL))objc_msgSend)(renderer, setActive, YES);
     }
 }
+
+%hook SBCoverSheetPresentationManager
+
+- (void)coverSheetSlidingViewController:(id)controller
+             animationTickedWithProgress:(double)progress
+                                velocity:(double)velocity
+                         coverSheetFrame:(CGRect)frame
+                           gestureActive:(BOOL)gestureActive
+                    forPresentationValue:(NSInteger)presentationValue {
+    %orig;
+    PBWApplyCoverSheetProgress(progress);
+}
+
+- (void)_setTransitionProgress:(double)progress
+                       animated:(BOOL)animated
+                  gestureActive:(BOOL)gestureActive
+            coverSheetProgress:(double)coverSheetProgress
+                     completion:(id)completion {
+    %orig;
+    PBWApplyCoverSheetProgress(coverSheetProgress);
+}
+
+%end
 
 static void PBWPreferencesChanged(CFNotificationCenterRef center, void *observer, CFStringRef name, const void *object, CFDictionaryRef userInfo) {
     dispatch_async(dispatch_get_main_queue(), ^{
