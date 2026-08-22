@@ -1,100 +1,13 @@
 #import <Foundation/Foundation.h>
 #import <UIKit/UIKit.h>
 #import <objc/message.h>
-#import <objc/runtime.h>
 
 static NSString *const kPreferencesDomain = @"com.charlieleung.pbwallpaperprefs";
 static CFStringRef const kPreferencesChanged = CFSTR("com.charlieleung.pbwallpaperprefs-updated");
-static NSInteger const kContainerTag = 0x50425716;
+static NSInteger const kRendererTag = 0x50425716;
 static NSUInteger retryCount;
-static BOOL lastAppliedStateKnown;
-static BOOL lastAppliedLocked;
-static BOOL interactiveOriginKnown;
-static BOOL interactiveOriginLocked;
-static char kStateMappingAssociationKey;
-static char kStateModelAssociationKey;
-
-@interface PBWStateModel : NSObject <NSXMLParserDelegate>
-@property(nonatomic, strong) NSMutableDictionary<NSString *, NSArray<NSNumber *> *> *layerPaths;
-@property(nonatomic, strong) NSMutableDictionary<NSString *, NSMutableDictionary<NSString *, NSMutableDictionary<NSString *, NSNumber *> *> *> *states;
-@property(nonatomic, strong) NSMutableArray<NSArray<NSNumber *> *> *layerStack;
-@property(nonatomic, strong) NSMutableArray<NSNumber *> *childCounts;
-@property(nonatomic, copy) NSString *currentState;
-@property(nonatomic, copy) NSString *currentTarget;
-@property(nonatomic, copy) NSString *currentKeyPath;
-@end
-
-@implementation PBWStateModel
-
-- (instancetype)init {
-    self = [super init];
-    if (self) {
-        _layerPaths = [NSMutableDictionary dictionary];
-        _states = [NSMutableDictionary dictionary];
-        _layerStack = [NSMutableArray array];
-        _childCounts = [NSMutableArray array];
-    }
-    return self;
-}
-
-- (void)parser:(NSXMLParser *)parser didStartElement:(NSString *)elementName namespaceURI:(NSString *)namespaceURI qualifiedName:(NSString *)qualifiedName attributes:(NSDictionary<NSString *, NSString *> *)attributes {
-    if ([elementName isEqualToString:@"CALayer"]) {
-        NSArray<NSNumber *> *path = nil;
-        if (self.layerStack.count == 0) {
-            path = @[];
-        } else {
-            NSUInteger childIndex = self.childCounts.lastObject.unsignedIntegerValue;
-            self.childCounts[self.childCounts.count - 1] = @(childIndex + 1);
-            path = [self.layerStack.lastObject arrayByAddingObject:@(childIndex)];
-        }
-        [self.layerStack addObject:path];
-        [self.childCounts addObject:@0];
-        NSString *identifier = attributes[@"id"];
-        if (identifier.length) {
-            self.layerPaths[identifier] = path;
-        }
-        return;
-    }
-    if ([elementName isEqualToString:@"LKState"]) {
-        self.currentState = attributes[@"name"];
-        return;
-    }
-    if ([elementName isEqualToString:@"LKStateSetValue"]) {
-        self.currentTarget = attributes[@"targetId"];
-        self.currentKeyPath = attributes[@"keyPath"];
-        return;
-    }
-    if ([elementName isEqualToString:@"value"] && self.currentState.length && self.currentTarget.length && self.currentKeyPath.length) {
-        NSString *rawValue = attributes[@"value"];
-        if (rawValue.length) {
-            NSMutableDictionary *state = self.states[self.currentState];
-            if (state == nil) {
-                state = [NSMutableDictionary dictionary];
-                self.states[self.currentState] = state;
-            }
-            NSMutableDictionary *target = state[self.currentTarget];
-            if (target == nil) {
-                target = [NSMutableDictionary dictionary];
-                state[self.currentTarget] = target;
-            }
-            target[self.currentKeyPath] = @([rawValue doubleValue]);
-        }
-    }
-}
-
-- (void)parser:(NSXMLParser *)parser didEndElement:(NSString *)elementName namespaceURI:(NSString *)namespaceURI qualifiedName:(NSString *)qualifiedName {
-    if ([elementName isEqualToString:@"CALayer"]) {
-        [self.layerStack removeLastObject];
-        [self.childCounts removeLastObject];
-    } else if ([elementName isEqualToString:@"LKStateSetValue"]) {
-        self.currentTarget = nil;
-        self.currentKeyPath = nil;
-    } else if ([elementName isEqualToString:@"LKState"]) {
-        self.currentState = nil;
-    }
-}
-
-@end
+static BOOL rendererStateKnown;
+static BOOL rendererLocked;
 
 static UIView *PBWWallpaperHost(void) {
     for (UIWindow *window in [UIApplication sharedApplication].windows) {
@@ -105,179 +18,6 @@ static UIView *PBWWallpaperHost(void) {
     return nil;
 }
 
-static NSDictionary<NSString *, NSString *> *PBWStateMappingForPackage(NSString *packagePath) {
-    NSString *documentPath = [packagePath stringByAppendingPathComponent:@"main.caml"];
-    NSString *document = [NSString stringWithContentsOfFile:documentPath encoding:NSUTF8StringEncoding error:nil];
-    if ([document containsString:@"<LKState name=\"Locked\""] && [document containsString:@"<LKState name=\"Unlock\""]) {
-        return @{ @"locked": @"Locked", @"home": @"Unlock" };
-    }
-    return @{ @"locked": @"Lock PortraitUp", @"home": @"Home PortraitUp" };
-}
-
-static void PBWApplyState(BOOL locked, BOOL animated, BOOL force) {
-    UIView *container = [PBWWallpaperHost() viewWithTag:kContainerTag];
-    if (container == nil || !container.subviews.count) {
-        return;
-    }
-    if (!force && lastAppliedStateKnown && lastAppliedLocked == locked) {
-        return;
-    }
-
-    SEL setState = NSSelectorFromString(@"setState:animated:");
-    for (UIView *packageView in container.subviews) {
-        if ([packageView respondsToSelector:setState]) {
-            NSDictionary<NSString *, NSString *> *mapping = objc_getAssociatedObject(packageView, &kStateMappingAssociationKey);
-            NSString *state = mapping[locked ? @"locked" : @"home"];
-            ((void (*)(id, SEL, NSString *, BOOL))objc_msgSend)(packageView, setState, state, animated);
-        }
-    }
-    lastAppliedStateKnown = YES;
-    lastAppliedLocked = locked;
-}
-
-static PBWStateModel *PBWStateModelForPackage(NSString *packagePath) {
-    NSXMLParser *parser = [[NSXMLParser alloc] initWithContentsOfURL:[NSURL fileURLWithPath:[packagePath stringByAppendingPathComponent:@"main.caml"]]];
-    if (parser == nil) {
-        return nil;
-    }
-    PBWStateModel *model = [PBWStateModel new];
-    parser.delegate = model;
-    return [parser parse] ? model : nil;
-}
-
-static CALayer *PBWLayerAtPath(CALayer *packageLayer, NSArray<NSNumber *> *path) {
-    CALayer *layer = packageLayer.sublayers.firstObject;
-    for (NSNumber *component in path) {
-        NSArray<CALayer *> *children = layer.sublayers;
-        NSUInteger index = component.unsignedIntegerValue;
-        if (index >= children.count) {
-            return nil;
-        }
-        layer = children[index];
-    }
-    return layer;
-}
-
-static void PBWApplyHomeFraction(double fraction) {
-    fraction = MAX(0.0, MIN(1.0, fraction));
-    UIView *container = [PBWWallpaperHost() viewWithTag:kContainerTag];
-    if (container == nil) {
-        return;
-    }
-
-    [CATransaction begin];
-    [CATransaction setDisableActions:YES];
-    for (UIView *packageView in container.subviews) {
-        PBWStateModel *model = objc_getAssociatedObject(packageView, &kStateModelAssociationKey);
-        NSDictionary<NSString *, NSString *> *mapping = objc_getAssociatedObject(packageView, &kStateMappingAssociationKey);
-        NSDictionary *locked = model.states[mapping[@"locked"]];
-        NSDictionary *unlocked = model.states[mapping[@"home"]];
-        if (locked.count == 0 || unlocked.count == 0) {
-            continue;
-        }
-        for (NSString *identifier in locked) {
-            NSDictionary<NSString *, NSNumber *> *fromValues = locked[identifier];
-            NSDictionary<NSString *, NSNumber *> *toValues = unlocked[identifier];
-            CALayer *layer = PBWLayerAtPath(packageView.layer, model.layerPaths[identifier]);
-            if (layer == nil || toValues == nil) {
-                continue;
-            }
-            for (NSString *keyPath in fromValues) {
-                NSNumber *from = fromValues[keyPath];
-                NSNumber *to = toValues[keyPath];
-                if (to == nil) {
-                    continue;
-                }
-                double value = from.doubleValue + (to.doubleValue - from.doubleValue) * fraction;
-                @try {
-                    [layer setValue:@(value) forKeyPath:keyPath];
-                } @catch (NSException *exception) {
-                }
-            }
-        }
-    }
-    [CATransaction commit];
-    lastAppliedStateKnown = NO;
-}
-
-static void PBWApplyCoverSheetProgress(double progress, BOOL gestureActive) {
-    // iOS sends a terminal progress=0 tick after the gesture ends. Applying it
-    // would overwrite the interaction's final CA frame with the home state.
-    if (!gestureActive) {
-        interactiveOriginKnown = NO;
-        return;
-    }
-
-    if (gestureActive && !interactiveOriginKnown) {
-        interactiveOriginLocked = lastAppliedLocked;
-        interactiveOriginKnown = YES;
-    }
-
-    BOOL startedLocked = interactiveOriginKnown ? interactiveOriginLocked : lastAppliedLocked;
-    double homeFraction = startedLocked ? progress : 1.0 - progress;
-    PBWApplyHomeFraction(homeFraction);
-}
-
-static void PBWRebindCoverSheetPortalSource(void) {
-    UIView *wallpaperHost = PBWWallpaperHost();
-    if (wallpaperHost == nil) {
-        return;
-    }
-
-    SEL sourceSelector = NSSelectorFromString(@"source");
-    SEL targetViewSelector = NSSelectorFromString(@"targetView");
-    SEL setTargetViewSelector = NSSelectorFromString(@"setTargetView:");
-    SEL updateSelector = NSSelectorFromString(@"setNeedsSourceUpdate");
-
-    for (UIWindow *window in [UIApplication sharedApplication].windows) {
-        if (![NSStringFromClass(window.class) isEqualToString:@"SBCoverSheetWindow"]) {
-            continue;
-        }
-
-        NSMutableArray<UIView *> *pending = [window.subviews mutableCopy];
-        while (pending.count) {
-            UIView *view = pending.lastObject;
-            [pending removeLastObject];
-            if ([NSStringFromClass(view.class) isEqualToString:@"PBUIPortalReplicaEffectView"] && [view respondsToSelector:sourceSelector]) {
-                id source = ((id (*)(id, SEL))objc_msgSend)(view, sourceSelector);
-                if ([source respondsToSelector:setTargetViewSelector]) {
-                    id currentTarget = [source respondsToSelector:targetViewSelector]
-                        ? ((id (*)(id, SEL))objc_msgSend)(source, targetViewSelector)
-                        : nil;
-                    if (currentTarget != wallpaperHost) {
-                        ((void (*)(id, SEL, id))objc_msgSend)(source, setTargetViewSelector, wallpaperHost);
-                        if ([view respondsToSelector:updateSelector]) {
-                            ((void (*)(id, SEL))objc_msgSend)(view, updateSelector);
-                        }
-                    }
-                }
-            }
-            [pending addObjectsFromArray:view.subviews];
-        }
-    }
-}
-
-static NSDictionary *PBWDefaultAssets(NSDictionary *wallpaper) {
-    NSDictionary *assets = wallpaper[@"assets"];
-    NSDictionary *lockAndHome = assets[@"lockAndHome"];
-    NSDictionary *defaults = lockAndHome[@"default"];
-    return [defaults isKindOfClass:NSDictionary.class] ? defaults : nil;
-}
-
-static UIView *PBWPackageView(NSURL *url) {
-    Class packageViewClass = NSClassFromString(@"BSUICAPackageView");
-    if (packageViewClass == Nil) {
-        return nil;
-    }
-
-    id instance = [packageViewClass alloc];
-    SEL initializer = NSSelectorFromString(@"initWithURL:");
-    if (![instance respondsToSelector:initializer]) {
-        return nil;
-    }
-    return ((id (*)(id, SEL, NSURL *))objc_msgSend)(instance, initializer, url);
-}
-
 static NSUserDefaults *PBWPreferences(void) {
     return [[NSUserDefaults alloc] initWithSuiteName:kPreferencesDomain];
 }
@@ -285,125 +25,131 @@ static NSUserDefaults *PBWPreferences(void) {
 static NSString *PBWActiveWallpaperPath(NSUserDefaults *preferences) {
     NSString *dataRoot = [preferences stringForKey:@"PBWDataRootPath"];
     if ([dataRoot isKindOfClass:NSString.class]) {
-        NSString *markerPath = [dataRoot stringByAppendingPathComponent:@".pbwactive"];
-        NSError *error = nil;
-        NSString *activePath = [NSString stringWithContentsOfFile:markerPath encoding:NSUTF8StringEncoding error:&error];
-        activePath = [activePath stringByTrimmingCharactersInSet:NSCharacterSet.whitespaceAndNewlineCharacterSet];
-        if (activePath.length && [[NSFileManager defaultManager] fileExistsAtPath:activePath]) {
-            return activePath;
+        NSString *marker = [dataRoot stringByAppendingPathComponent:@".pbwactive"];
+        NSString *path = [NSString stringWithContentsOfFile:marker encoding:NSUTF8StringEncoding error:nil];
+        path = [path stringByTrimmingCharactersInSet:NSCharacterSet.whitespaceAndNewlineCharacterSet];
+        if (path.length && [[NSFileManager defaultManager] fileExistsAtPath:path]) {
+            return path;
         }
     }
 
-    NSString *selectedPath = [preferences stringForKey:@"pbWallpaperPath"];
-    return [[NSFileManager defaultManager] fileExistsAtPath:selectedPath] ? selectedPath : nil;
+    NSString *path = [preferences stringForKey:@"pbWallpaperPath"];
+    return [[NSFileManager defaultManager] fileExistsAtPath:path] ? path : nil;
 }
 
-static void PBWRemoveContainer(void) {
-    UIView *host = PBWWallpaperHost();
-    [[host viewWithTag:kContainerTag] removeFromSuperview];
-    lastAppliedStateKnown = NO;
+static NSDictionary *PBWRendererConfiguration(NSString *wallpaperPath) {
+    NSDictionary *manifest = [NSDictionary dictionaryWithContentsOfFile:[wallpaperPath stringByAppendingPathComponent:@"Wallpaper.plist"]];
+    NSDictionary *assets = manifest[@"assets"];
+    NSDictionary *lockAndHome = assets[@"lockAndHome"];
+    NSDictionary *configuration = lockAndHome[@"default"];
+    return [configuration isKindOfClass:NSDictionary.class] ? configuration : nil;
 }
 
-static void PBWInstallPackages(void) {
+static BOOL PBWIsUILocked(void) {
+    Class managerClass = NSClassFromString(@"SBLockScreenManager");
+    SEL sharedSelector = NSSelectorFromString(@"sharedInstance");
+    SEL lockedSelector = NSSelectorFromString(@"isUILocked");
+    if (managerClass == Nil || ![managerClass respondsToSelector:sharedSelector]) {
+        return NO;
+    }
+
+    id manager = ((id (*)(id, SEL))objc_msgSend)(managerClass, sharedSelector);
+    return manager != nil && [manager respondsToSelector:lockedSelector]
+        ? ((BOOL (*)(id, SEL))objc_msgSend)(manager, lockedSelector)
+        : NO;
+}
+
+static id PBWRenderer(void) {
+    return [PBWWallpaperHost() viewWithTag:kRendererTag];
+}
+
+static void PBWApplyLockState(BOOL locked, BOOL force) {
+    id renderer = PBWRenderer();
+    SEL selector = NSSelectorFromString(@"PBWMethod011:");
+    if (renderer == nil || ![renderer respondsToSelector:selector]) {
+        return;
+    }
+    if (!force && rendererStateKnown && rendererLocked == locked) {
+        return;
+    }
+
+    ((void (*)(id, SEL, BOOL))objc_msgSend)(renderer, selector, locked);
+    rendererStateKnown = YES;
+    rendererLocked = locked;
+}
+
+static void PBWApplyCoverSheetProgress(double progress) {
+    id renderer = PBWRenderer();
+    SEL selector = NSSelectorFromString(@"PBWMethod012:");
+    if (renderer != nil && [renderer respondsToSelector:selector]) {
+        ((void (*)(id, SEL, double))objc_msgSend)(renderer, selector, progress);
+    }
+}
+
+static void PBWRemoveRenderer(void) {
+    [PBWRenderer() removeFromSuperview];
+    rendererStateKnown = NO;
+}
+
+static void PBWInstallRenderer(void) {
     NSUserDefaults *preferences = PBWPreferences();
     if (![preferences boolForKey:@"PBWallpaperEnabled"]) {
-        PBWRemoveContainer();
+        PBWRemoveRenderer();
         return;
     }
 
     NSString *wallpaperPath = PBWActiveWallpaperPath(preferences);
-    if (wallpaperPath == nil) {
-        PBWRemoveContainer();
-        return;
-    }
-
-    NSDictionary *wallpaper = [NSDictionary dictionaryWithContentsOfFile:[wallpaperPath stringByAppendingPathComponent:@"Wallpaper.plist"]];
-    NSDictionary *assets = PBWDefaultAssets(wallpaper);
+    NSDictionary *configuration = PBWRendererConfiguration(wallpaperPath);
     UIView *host = PBWWallpaperHost();
-    if (assets == nil || host == nil) {
+    Class rendererClass = NSClassFromString(@"hpebutktbedt");
+    SEL loader = NSSelectorFromString(@"PBWMethod009:PBWMethod010:");
+    if (wallpaperPath == nil || configuration == nil || host == nil || rendererClass == Nil) {
         if (retryCount++ < 20) {
             dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(500 * NSEC_PER_MSEC)), dispatch_get_main_queue(), ^{
-                PBWInstallPackages();
+                PBWInstallRenderer();
             });
         }
         return;
     }
 
     retryCount = 0;
-    [[host viewWithTag:kContainerTag] removeFromSuperview];
-    lastAppliedStateKnown = NO;
+    PBWRemoveRenderer();
 
-    UIView *container = [[UIView alloc] initWithFrame:host.bounds];
-    container.tag = kContainerTag;
-    container.autoresizingMask = UIViewAutoresizingFlexibleWidth | UIViewAutoresizingFlexibleHeight;
-    container.userInteractionEnabled = NO;
-    container.clipsToBounds = YES;
-
-    NSArray<NSString *> *keys = @[
-        @"backgroundAnimationFileName",
-        @"foregroundAnimationFileName",
-        @"floatingAnimationFileNameKey"
-    ];
-    for (NSString *key in keys) {
-        NSString *filename = assets[key];
-        if (![filename isKindOfClass:NSString.class]) {
-            continue;
-        }
-        NSString *packagePath = [wallpaperPath stringByAppendingPathComponent:filename];
-        if (![[NSFileManager defaultManager] fileExistsAtPath:packagePath]) {
-            continue;
-        }
-        UIView *packageView = PBWPackageView([NSURL fileURLWithPath:packagePath]);
-        if (packageView == nil) {
-            continue;
-        }
-        packageView.frame = container.bounds;
-        packageView.autoresizingMask = UIViewAutoresizingFlexibleWidth | UIViewAutoresizingFlexibleHeight;
-        packageView.userInteractionEnabled = NO;
-        objc_setAssociatedObject(packageView, &kStateMappingAssociationKey, PBWStateMappingForPackage(packagePath), OBJC_ASSOCIATION_RETAIN_NONATOMIC);
-        objc_setAssociatedObject(packageView, &kStateModelAssociationKey, PBWStateModelForPackage(packagePath), OBJC_ASSOCIATION_RETAIN_NONATOMIC);
-        [container addSubview:packageView];
+    UIView *renderer = [[rendererClass alloc] initWithFrame:host.bounds];
+    if (renderer == nil || ![renderer respondsToSelector:loader]) {
+        return;
     }
 
-    if (container.subviews.count) {
-        BOOL locked = lastAppliedStateKnown ? lastAppliedLocked : NO;
-        [host addSubview:container];
-        PBWApplyState(locked, NO, YES);
-        dispatch_async(dispatch_get_main_queue(), ^{
-            PBWApplyHomeFraction(locked ? 0.0 : 1.0);
-        });
-    }
+    renderer.tag = kRendererTag;
+    renderer.autoresizingMask = UIViewAutoresizingFlexibleWidth | UIViewAutoresizingFlexibleHeight;
+    renderer.userInteractionEnabled = NO;
+    renderer.clipsToBounds = YES;
+    [host addSubview:renderer];
+
+    // PBWallpaper forwards this unmodified configuration object into its native model builder.
+    ((void (*)(id, SEL, id, id))objc_msgSend)(renderer, loader, wallpaperPath, configuration);
+    PBWApplyLockState(PBWIsUILocked(), YES);
 }
 
 static void PBWPreferencesChanged(CFNotificationCenterRef center, void *observer, CFStringRef name, const void *object, CFDictionaryRef userInfo) {
     dispatch_async(dispatch_get_main_queue(), ^{
         retryCount = 0;
-        PBWInstallPackages();
+        PBWInstallRenderer();
     });
 }
 
 %ctor {
     CFNotificationCenterAddObserver(CFNotificationCenterGetDarwinNotifyCenter(), NULL, PBWPreferencesChanged, kPreferencesChanged, NULL, CFNotificationSuspensionBehaviorDeliverImmediately);
     dispatch_async(dispatch_get_main_queue(), ^{
-        PBWInstallPackages();
+        PBWInstallRenderer();
     });
 }
 
 %hook SBLockScreenManager
 
-- (void)lockScreenViewControllerWillPresent {
-    PBWApplyState(YES, YES, NO);
-    %orig;
-}
-
-- (void)lockScreenViewControllerWillDismiss {
-    PBWApplyState(NO, YES, NO);
-    %orig;
-}
-
 - (void)_reallySetUILocked:(BOOL)locked {
-    PBWApplyState(locked, YES, NO);
     %orig;
+    PBWApplyLockState(locked, NO);
 }
 
 %end
@@ -412,10 +158,7 @@ static void PBWPreferencesChanged(CFNotificationCenterRef center, void *observer
 
 - (void)coverSheetSlidingViewController:(id)controller animationTickedWithProgress:(double)progress velocity:(double)velocity coverSheetFrame:(CGRect)frame gestureActive:(BOOL)gestureActive forPresentationValue:(BOOL)presentationValue {
     %orig;
-    PBWApplyCoverSheetProgress(progress, gestureActive);
-    dispatch_async(dispatch_get_main_queue(), ^{
-        PBWRebindCoverSheetPortalSource();
-    });
+    PBWApplyCoverSheetProgress(progress);
 }
 
 %end
