@@ -136,6 +136,7 @@ static BOOL PBWIsUILocked(void) {    Class managerClass = NSClassFromString(@"SB
     container.autoresizingMask = UIViewAutoresizingFlexibleWidth | UIViewAutoresizingFlexibleHeight;
     container.userInteractionEnabled = NO;
     container.clipsToBounds = YES;
+    container.backgroundColor = UIColor.blackColor;
     NSArray<NSString *> *keys = @[@"backgroundAnimationFileName", @"foregroundAnimationFileName", @"floatingAnimationFileNameKey"];
     for (NSString *key in keys) {
         NSString *filename = assets[key];
