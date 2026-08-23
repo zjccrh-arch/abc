@@ -65,9 +65,7 @@ static UIView *PBWWallpaperHost(void) {
 static NSArray<UIView *> *PBWRendererContainers(void) {
     NSMutableArray<UIView *> *containers = [NSMutableArray array];
     UIView *secureContainer = [PBWWallpaperHost() viewWithTag:kSecureContainerTag];
-    UIView *coverSheetContainer = [PBWCoverSheetHost() viewWithTag:kCoverSheetContainerTag];
     if (secureContainer != nil) [containers addObject:secureContainer];
-    if (coverSheetContainer != nil) [containers addObject:coverSheetContainer];
     return containers;
 }
 static BOOL PBWIsUILocked(void) {    Class managerClass = NSClassFromString(@"SBLockScreenManager");    SEL sharedInstance = NSSelectorFromString(@"sharedInstance");    SEL isUILocked = NSSelectorFromString(@"isUILocked");    if (managerClass == Nil || ![managerClass respondsToSelector:sharedInstance]) {        return NO;    }    id manager = ((id (*)(id, SEL))objc_msgSend)(managerClass, sharedInstance);    if (manager == nil || ![manager respondsToSelector:isUILocked]) {        return NO;    }    return ((BOOL (*)(id, SEL))objc_msgSend)(manager, isUILocked);}static NSDictionary<NSString *, NSString *> *PBWStateMappingForPackage(NSString *packagePath) {    NSString *documentPath = [packagePath stringByAppendingPathComponent:@"main.caml"];    NSString *document = [NSString stringWithContentsOfFile:documentPath encoding:NSUTF8StringEncoding error:nil];    if ([document containsString:@"<LKState name=\"Locked\""] && [document containsString:@"<LKState name=\"Unlock\""]) {        return @{ @"locked": @"Locked", @"home": @"Unlock" };    }    return @{ @"locked": @"Lock PortraitUp", @"home": @"Home PortraitUp" };}static void PBWApplyState(BOOL locked, BOOL animated, BOOL force) {
@@ -114,8 +112,6 @@ static BOOL PBWIsUILocked(void) {    Class managerClass = NSClassFromString(@"SB
     }
     [CATransaction commit];
 }static void PBWApplyCoverSheetProgressOnMain(double progress) {
-    UIView *coverSheetHost = PBWCoverSheetHost();
-    if (coverSheetHost != nil && [coverSheetHost viewWithTag:kCoverSheetContainerTag] == nil) PBWInstallCoverSheetRenderer();
     PBWApplyHomeFraction(progress);
     NSInteger endpoint = progress <= 0.001 ? 1 : (progress >= 0.999 ? 0 : -1);
     if (endpoint < 0) {
@@ -214,7 +210,6 @@ static void PBWRemoveContainer(void) {
     lastCoverSheetEndpoint = -1;
     PBWCreateRendererContainer(secureHost, kSecureContainerTag, wallpaperPath, assets, NO);
     [[PBWCoverSheetHost() viewWithTag:kCoverSheetContainerTag] removeFromSuperview];
-    PBWInstallCoverSheetRenderer();
     lastAppliedStateKnown = YES;
     lastAppliedLocked = PBWIsUILocked();
 }static void PBWPreferencesChanged(CFNotificationCenterRef center, void *observer, CFStringRef name, const void *object, CFDictionaryRef userInfo) {    dispatch_async(dispatch_get_main_queue(), ^{        retryCount = 0;        PBWInstallPackages();    });}
@@ -227,7 +222,6 @@ static void PBWRemoveContainer(void) {
 
 %hook SBLockScreenManager
 - (void)lockScreenViewControllerWillPresent {
-    PBWInstallCoverSheetRenderer();
     PBWApplyState(YES, YES, NO);
     %orig;
 }
