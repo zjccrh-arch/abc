@@ -8,6 +8,14 @@ static CGSize PBWFullscreenSizeThatFits(id receiver, SEL selector, CGSize size) 
     return bounds.width > 0.0 && bounds.height > 0.0 ? bounds : size;
 }
 
+static void PBWFullscreenLayoutSubviews(id receiver, SEL selector) {
+    struct objc_super superInfo = { receiver, class_getSuperclass(object_getClass(receiver)) };
+    ((void (*)(struct objc_super *, SEL))objc_msgSendSuper)(&superInfo, selector);
+    UIView *view = (UIView *)receiver;
+    CALayer *content = view.layer.sublayers.firstObject;
+    if (content != nil) content.frame = view.bounds;
+}
+
 static Class PBWFullscreenPackageViewClass(void) {
     static Class packageViewClass;
     static dispatch_once_t onceToken;
@@ -19,6 +27,7 @@ static Class PBWFullscreenPackageViewClass(void) {
         packageViewClass = objc_allocateClassPair(parent, "PBWFullscreenPackageView", 0);
         if (packageViewClass == Nil) return;
         class_addMethod(packageViewClass, @selector(sizeThatFits:), (IMP)PBWFullscreenSizeThatFits, "{CGSize=dd}@:{CGSize=dd}");
+        class_addMethod(packageViewClass, @selector(layoutSubviews), (IMP)PBWFullscreenLayoutSubviews, "v@:");
         objc_registerClassPair(packageViewClass);
     });
     return packageViewClass;
