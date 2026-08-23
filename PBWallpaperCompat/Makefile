@@ -7,7 +7,7 @@ INSTALL_TARGET_PROCESSES = SpringBoard
 include $(THEOS)/makefiles/common.mk
 
 TWEAK_NAME = PBWallpaperCompat
-PBWallpaperCompat_FILES = Tweak.xm
+PBWallpaperCompat_FILES = Tweak.xm TweakTransitionFix.xm
 PBWallpaperCompat_CFLAGS = -fobjc-arc -Wno-deprecated-declarations
 PBWallpaperCompat_FRAMEWORKS = UIKit Foundation
 
