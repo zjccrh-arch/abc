@@ -86,16 +86,18 @@ static BOOL PBWIsUILocked(void) {    Class managerClass = NSClassFromString(@"SB
 }static void PBWApplyCoverSheetProgress(double progress, BOOL gestureActive) {
     UIView *coverSheetHost = PBWCoverSheetHost();
     if (coverSheetHost != nil && [coverSheetHost viewWithTag:kCoverSheetContainerTag] == nil) PBWInstallPackages();
-    if (!gestureActive) {
-        interactiveOriginKnown = NO;
-        return;
-    }
+    if (!interactiveOriginKnown && !gestureActive) return;
     if (!interactiveOriginKnown) {
         interactiveOriginLocked = PBWIsUILocked();
         interactiveOriginKnown = YES;
     }
-    BOOL startedLocked = interactiveOriginKnown ? interactiveOriginLocked : PBWIsUILocked();
-    PBWApplyHomeFraction(startedLocked ? progress : 1.0 - progress);
+    BOOL startedLocked = interactiveOriginLocked;
+    double fraction = startedLocked ? progress : 1.0 - progress;
+    PBWApplyHomeFraction(fraction);
+    if (!gestureActive && (progress <= 0.001 || progress >= 0.999)) {
+        PBWApplyState(fraction <= 0.5, NO, YES);
+        interactiveOriginKnown = NO;
+    }
 }static NSDictionary *PBWDefaultAssets(NSDictionary *wallpaper) {    NSDictionary *assets = wallpaper[@"assets"];    NSDictionary *lockAndHome = assets[@"lockAndHome"];    NSDictionary *defaults = lockAndHome[@"default"];    return [defaults isKindOfClass:NSDictionary.class] ? defaults : nil;}static UIView *PBWPackageView(NSURL *url) {    Class packageViewClass = NSClassFromString(@"BSUICAPackageView");    if (packageViewClass == Nil) {        return nil;    }    id instance = [packageViewClass alloc];    SEL initializer = NSSelectorFromString(@"initWithURL:");    if (![instance respondsToSelector:initializer]) {        return nil;    }    return ((id (*)(id, SEL, NSURL *))objc_msgSend)(instance, initializer, url);}static UIView *PBWCreateRendererContainer(UIView *host, NSInteger tag, NSString *wallpaperPath, NSDictionary *assets, BOOL coverSheet) {
     [[host viewWithTag:tag] removeFromSuperview];
     UIView *container = [[UIView alloc] initWithFrame:host.bounds];
