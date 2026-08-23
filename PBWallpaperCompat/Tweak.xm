@@ -85,8 +85,8 @@ static BOOL PBWIsUILocked(void) {    Class managerClass = NSClassFromString(@"SB
 }static void PBWApplyCoverSheetProgressOnMain(double progress) {
     UIView *coverSheetHost = PBWCoverSheetHost();
     if (coverSheetHost != nil && [coverSheetHost viewWithTag:kCoverSheetContainerTag] == nil) PBWInstallCoverSheetRenderer();
-    PBWApplyHomeFraction(1.0 - progress);
-    NSInteger endpoint = progress <= 0.001 ? 0 : (progress >= 0.999 ? 1 : -1);
+    PBWApplyHomeFraction(progress);
+    NSInteger endpoint = progress <= 0.001 ? 1 : (progress >= 0.999 ? 0 : -1);
     if (endpoint < 0) {
         lastCoverSheetEndpoint = -1;
         return;
