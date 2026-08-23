@@ -2,7 +2,7 @@
 #import <UIKit/UIKit.h>
 #import <objc/message.h>
 #import <objc/runtime.h>
-static NSString *const kPreferencesDomain = @"com.charlieleung.pbwallpaperprefs";static CFStringRef const kPreferencesChanged = CFSTR("com.charlieleung.pbwallpaperprefs-updated");static NSInteger const kSecureContainerTag = 0x50425716;static NSInteger const kCoverSheetContainerTag = 0x50425717;static NSUInteger retryCount;static NSUInteger coverSheetRetryCount;static BOOL lastAppliedStateKnown;static BOOL lastAppliedLocked;static char kStateMappingAssociationKey;static char kStateModelAssociationKey;
+static NSString *const kPreferencesDomain = @"com.charlieleung.pbwallpaperprefs";static CFStringRef const kPreferencesChanged = CFSTR("com.charlieleung.pbwallpaperprefs-updated");static NSInteger const kSecureContainerTag = 0x50425716;static NSInteger const kCoverSheetContainerTag = 0x50425717;static NSUInteger retryCount;static NSUInteger coverSheetRetryCount;static NSInteger lastCoverSheetEndpoint = -1;static BOOL lastAppliedStateKnown;static BOOL lastAppliedLocked;static char kStateMappingAssociationKey;static char kStateModelAssociationKey;
 static void PBWInstallPackages(void);static void PBWInstallCoverSheetRenderer(void);@interface PBWStateModel : NSObject <NSXMLParserDelegate>@property(nonatomic, strong) NSMutableDictionary<NSString *, NSArray<NSNumber *> *> *layerPaths;@property(nonatomic, strong) NSMutableDictionary<NSString *, NSMutableDictionary<NSString *, NSMutableDictionary<NSString *, NSNumber *> *> *> *states;@property(nonatomic, strong) NSMutableArray<NSArray<NSNumber *> *> *layerStack;@property(nonatomic, strong) NSMutableArray<NSNumber *> *childCounts;@property(nonatomic, copy) NSString *currentState;@property(nonatomic, copy) NSString *currentTarget;@property(nonatomic, copy) NSString *currentKeyPath;@end@implementation PBWStateModel- (instancetype)init {    self = [super init];    if (self) {        _layerPaths = [NSMutableDictionary dictionary];        _states = [NSMutableDictionary dictionary];        _layerStack = [NSMutableArray array];        _childCounts = [NSMutableArray array];    }    return self;}- (void)parser:(NSXMLParser *)parser didStartElement:(NSString *)elementName namespaceURI:(NSString *)namespaceURI qualifiedName:(NSString *)qualifiedName attributes:(NSDictionary<NSString *, NSString *> *)attributes {    if ([elementName isEqualToString:@"CALayer"]) {        NSArray<NSNumber *> *path = nil;        if (self.layerStack.count == 0) {            path = @[];        } else {            NSUInteger childIndex = self.childCounts.lastObject.unsignedIntegerValue;            self.childCounts[self.childCounts.count - 1] = @(childIndex + 1);            path = [self.layerStack.lastObject arrayByAddingObject:@(childIndex)];        }        [self.layerStack addObject:path];        [self.childCounts addObject:@0];        NSString *identifier = attributes[@"id"];        if (identifier.length) {            self.layerPaths[identifier] = path;        }        return;    }    if ([elementName isEqualToString:@"LKState"]) {        self.currentState = attributes[@"name"];        return;    }    if ([elementName isEqualToString:@"LKStateSetValue"]) {        self.currentTarget = attributes[@"targetId"];        self.currentKeyPath = attributes[@"keyPath"];        return;    }    if ([elementName isEqualToString:@"value"] && self.currentState.length && self.currentTarget.length && self.currentKeyPath.length) {        NSString *rawValue = attributes[@"value"];        if (rawValue.length) {            NSMutableDictionary *state = self.states[self.currentState];            if (state == nil) {                state = [NSMutableDictionary dictionary];                self.states[self.currentState] = state;            }            NSMutableDictionary *target = state[self.currentTarget];            if (target == nil) {                target = [NSMutableDictionary dictionary];                state[self.currentTarget] = target;            }            target[self.currentKeyPath] = @([rawValue doubleValue]);        }    }}- (void)parser:(NSXMLParser *)parser didEndElement:(NSString *)elementName namespaceURI:(NSString *)namespaceURI qualifiedName:(NSString *)qualifiedName {    if ([elementName isEqualToString:@"CALayer"]) {        [self.layerStack removeLastObject];        [self.childCounts removeLastObject];    } else if ([elementName isEqualToString:@"LKStateSetValue"]) {        self.currentTarget = nil;        self.currentKeyPath = nil;    } else if ([elementName isEqualToString:@"LKState"]) {        self.currentState = nil;    }}@end
 static UIView *PBWWallpaperHost(void) {
     for (UIWindow *window in [UIApplication sharedApplication].windows) {
@@ -82,13 +82,18 @@ static BOOL PBWIsUILocked(void) {    Class managerClass = NSClassFromString(@"SB
         }
     }
     [CATransaction commit];
-    lastAppliedStateKnown = NO;
 }static void PBWApplyCoverSheetProgress(double progress) {
     UIView *coverSheetHost = PBWCoverSheetHost();
     if (coverSheetHost != nil && [coverSheetHost viewWithTag:kCoverSheetContainerTag] == nil) PBWInstallCoverSheetRenderer();
     PBWApplyHomeFraction(1.0 - progress);
-    if (progress <= 0.001) PBWApplyState(NO, NO, YES);
-    else if (progress >= 0.999) PBWApplyState(YES, NO, YES);
+    NSInteger endpoint = progress <= 0.001 ? 0 : (progress >= 0.999 ? 1 : -1);
+    if (endpoint < 0) {
+        lastCoverSheetEndpoint = -1;
+        return;
+    }
+    if (lastCoverSheetEndpoint == endpoint) return;
+    lastCoverSheetEndpoint = endpoint;
+    PBWApplyState(endpoint == 1, NO, YES);
 }static NSDictionary *PBWDefaultAssets(NSDictionary *wallpaper) {    NSDictionary *assets = wallpaper[@"assets"];    NSDictionary *lockAndHome = assets[@"lockAndHome"];    NSDictionary *defaults = lockAndHome[@"default"];    return [defaults isKindOfClass:NSDictionary.class] ? defaults : nil;}static UIView *PBWPackageView(NSURL *url) {    Class packageViewClass = NSClassFromString(@"BSUICAPackageView");    if (packageViewClass == Nil) {        return nil;    }    id instance = [packageViewClass alloc];    SEL initializer = NSSelectorFromString(@"initWithURL:");    if (![instance respondsToSelector:initializer]) {        return nil;    }    return ((id (*)(id, SEL, NSURL *))objc_msgSend)(instance, initializer, url);}static UIView *PBWCreateRendererContainer(UIView *host, NSInteger tag, NSString *wallpaperPath, NSDictionary *assets, BOOL coverSheet) {
     [[host viewWithTag:tag] removeFromSuperview];
     UIView *container = [[UIView alloc] initWithFrame:host.bounds];
@@ -147,6 +152,7 @@ static void PBWRemoveContainer(void) {
     [[PBWCoverSheetHost() viewWithTag:kCoverSheetContainerTag] removeFromSuperview];
     retryCount = 0;
     coverSheetRetryCount = 0;
+    lastCoverSheetEndpoint = -1;
     lastAppliedStateKnown = NO;
 }static void PBWInstallPackages(void) {
     NSUserDefaults *preferences = PBWPreferences();
@@ -169,6 +175,7 @@ static void PBWRemoveContainer(void) {
         return;
     }
     retryCount = 0;
+    lastCoverSheetEndpoint = -1;
     PBWCreateRendererContainer(secureHost, kSecureContainerTag, wallpaperPath, assets, NO);
     [[PBWCoverSheetHost() viewWithTag:kCoverSheetContainerTag] removeFromSuperview];
     PBWInstallCoverSheetRenderer();
