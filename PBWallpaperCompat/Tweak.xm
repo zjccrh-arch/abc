@@ -82,7 +82,7 @@ static BOOL PBWIsUILocked(void) {    Class managerClass = NSClassFromString(@"SB
         }
     }
     [CATransaction commit];
-}static void PBWApplyCoverSheetProgress(double progress) {
+}static void PBWApplyCoverSheetProgressOnMain(double progress) {
     UIView *coverSheetHost = PBWCoverSheetHost();
     if (coverSheetHost != nil && [coverSheetHost viewWithTag:kCoverSheetContainerTag] == nil) PBWInstallCoverSheetRenderer();
     PBWApplyHomeFraction(1.0 - progress);
@@ -94,6 +94,10 @@ static BOOL PBWIsUILocked(void) {    Class managerClass = NSClassFromString(@"SB
     if (lastCoverSheetEndpoint == endpoint) return;
     lastCoverSheetEndpoint = endpoint;
     PBWApplyState(endpoint == 1, NO, YES);
+}static void PBWApplyCoverSheetProgress(double progress) {
+    dispatch_async(dispatch_get_main_queue(), ^{
+        PBWApplyCoverSheetProgressOnMain(progress);
+    });
 }static NSDictionary *PBWDefaultAssets(NSDictionary *wallpaper) {    NSDictionary *assets = wallpaper[@"assets"];    NSDictionary *lockAndHome = assets[@"lockAndHome"];    NSDictionary *defaults = lockAndHome[@"default"];    return [defaults isKindOfClass:NSDictionary.class] ? defaults : nil;}static UIView *PBWPackageView(NSURL *url) {    Class packageViewClass = NSClassFromString(@"BSUICAPackageView");    if (packageViewClass == Nil) {        return nil;    }    id instance = [packageViewClass alloc];    SEL initializer = NSSelectorFromString(@"initWithURL:");    if (![instance respondsToSelector:initializer]) {        return nil;    }    return ((id (*)(id, SEL, NSURL *))objc_msgSend)(instance, initializer, url);}static UIView *PBWCreateRendererContainer(UIView *host, NSInteger tag, NSString *wallpaperPath, NSDictionary *assets, BOOL coverSheet) {
     [[host viewWithTag:tag] removeFromSuperview];
     UIView *container = [[UIView alloc] initWithFrame:host.bounds];
